@@ -195,3 +195,8 @@
   EXPECT: G37 PASS
   EVIDENCE: 1 passed (0 failed). Non-blocking `advisory_notice` and `check_with_advisory` return structured steering guidance on repeated calls before tripping hard circuit breakers.
 
+- [x] G38: DeepSeek & Engram Hardened Vectors: Dead Memory GC, Speculative Prefetch, Paraclea HUD, Tiny Model GBNF Critic & Soup Synapse
+  CHECK: cargo test --workspace && echo "G38 PASS"
+  EXPECT: G38 PASS
+  EVIDENCE: All unit tests pass across all crates. Epistemic dead-memory garbage collection verified; speculative memory prefetcher active; Paraclea status HUD integrated; tiny-model tool critic repair filters active; Soup Synapse extension registered.
+

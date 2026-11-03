@@ -61,6 +61,7 @@ Type `/` in the prompt bar to trigger the floating command menu:
 | `/doctor` | Launch Cynapse Doctor self-healing diagnostic dashboard |
 | `/memory` | Launch 3D Orbital Galaxy Memory Atlas visualizer |
 | `/drawer` | Open interactive Dendrite Memory drawer inspector |
+| `/synapse` | Manage modular Synapse tool extensions (`soup`, `finetune`, etc.) |
 | `/thinking` | Toggle collapsible model reasoning/thinking stream blocks |
 | `/theme` | Cycle color themes (Dark Slate, Neon Cyber, Amber CRT, Emerald Matrix) |
 | `/update` | Check, pull, and compile latest Cynapse updates with non-blocking live modal |
@@ -116,6 +117,7 @@ Memory in Cynapse is modeled after biological neural networks with a force-direc
 - **Force-Directed 3D Galaxy Physics**: Real Coulomb repulsion, Hooke spring attraction, central gravity toward the supermassive core, velocity damping (0.88), collision avoidance, and force clamping.
 - **3D Orbital Galaxy Visualizer (`/memory`)**: Visualizes memory nodes as stars organized into galactic clusters revolving around a supermassive central core.
 - **Two-Tier Hybrid Memory Recall**: Merges SQLite FTS5 keyword matching with BM25 scoring, specialization index weighting, and exponential temporal decay.
+- **Engram & DeepSeek Hardened Architecture**: Generation-fenced SQLite transactions, calibrated BM25 score bounds, topic-key in-place upserting (`family/slug`), contradiction and supersede tracking, tool-result middle-pruning, and speculative memory prefetching.
 - **Structured Memory Micro-Channels**: Session facts, recalled knowledge, and memory index injected as structured prompt sections.
 
 ### Atomic-Agent Architecture Elevation
