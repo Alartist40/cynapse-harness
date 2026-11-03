@@ -177,6 +177,14 @@ pub struct Node {
     pub vz: f32,
     /// Gravitational mass computed from specialization index and connectivity
     pub mass: f32,
+    /// Hierarchical kebab-case topic key (Engram paradigm, e.g. "architecture/auth-model")
+    pub topic_key: Option<String>,
+    /// Evolution revision count (increments on topic upsert)
+    pub revision_count: u32,
+    /// Memory IDs or topic keys that this node obsoletes / supersedes
+    pub supersedes: Vec<String>,
+    /// Memory IDs or topic keys that directly contradict this node
+    pub conflicts_with: Vec<String>,
 }
 
 impl Node {
@@ -257,6 +265,10 @@ impl Node {
             vy: 0.0,
             vz: 0.0,
             mass: 1.0,
+            topic_key: None,
+            revision_count: 1,
+            supersedes: Vec::new(),
+            conflicts_with: Vec::new(),
         };
         n.mass = n.compute_mass();
         n
@@ -384,26 +396,55 @@ impl Dendrite {
         node_type: NodeType,
         tags: Option<Vec<String>>,
     ) -> Node {
+        self.upsert_with_topic(id, None, title, content, node_type, tags)
+    }
+
+    /// Upsert with optional Engram-style hierarchical topic key (`family/slug`).
+    /// If an existing node shares the same topic key, it is updated in-place (`revision_count += 1`).
+    pub fn upsert_with_topic(
+        &self,
+        id: &str,
+        topic_key: Option<&str>,
+        title: &str,
+        content: &str,
+        node_type: NodeType,
+        tags: Option<Vec<String>>,
+    ) -> Node {
         let now = timestamp();
         let links = parse_links(content);
         let tags = tags.unwrap_or_else(|| parse_tags(content));
 
         let mut inner = lock_inner(&self.inner);
 
+        // Check if an existing node already owns this topic_key
+        let topic_match_id = if let Some(t_key) = topic_key {
+            inner.nodes.iter().find_map(|(k, v)| {
+                if v.topic_key.as_deref() == Some(t_key) {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
+        let effective_id = topic_match_id.as_deref().unwrap_or(id);
+
         // Remove old backlinks from the previous version of this node.
         let old_links: Vec<String> = inner
             .nodes
-            .get(id)
+            .get(effective_id)
             .map(|old| old.links.clone())
             .unwrap_or_default();
         for old_link in &old_links {
             if let Some(target) = inner.nodes.get_mut(old_link) {
-                target.backlinks = remove_str(&target.backlinks, id);
+                target.backlinks = remove_str(&target.backlinks, effective_id);
             }
         }
 
         let total_nodes = inner.nodes.len();
-        let node = match inner.nodes.entry(id.to_string()) {
+        let node = match inner.nodes.entry(effective_id.to_string()) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 let n = e.get_mut();
                 n.title = title.to_string();
@@ -412,6 +453,10 @@ impl Dendrite {
                 n.tags = tags;
                 n.links = links.clone();
                 n.updated_at = now;
+                if topic_key.is_some() {
+                    n.topic_key = topic_key.map(|s| s.to_string());
+                }
+                n.revision_count += 1;
                 n.mass = n.compute_mass();
                 n.clone()
             }
@@ -435,6 +480,10 @@ impl Dendrite {
                         vy: 0.0,
                         vz: 0.0,
                         mass: 1.0,
+                        topic_key: None,
+                        revision_count: 1,
+                        supersedes: Vec::new(),
+                        conflicts_with: Vec::new(),
                     };
                     temp.category()
                 };
@@ -443,7 +492,7 @@ impl Dendrite {
                 let jitter_r = ((count % 5) as f32 - 2.0) * 0.35;
                 let jitter_y = ((count % 3) as f32 - 1.0) * 0.25;
                 let mut n = Node {
-                    id: id.to_string(),
+                    id: effective_id.to_string(),
                     title: title.to_string(),
                     content: content.to_string(),
                     node_type,
@@ -459,6 +508,10 @@ impl Dendrite {
                     vy: 0.0,
                     vz: 0.0,
                     mass: 1.0,
+                    topic_key: topic_key.map(|s| s.to_string()),
+                    revision_count: 1,
+                    supersedes: Vec::new(),
+                    conflicts_with: Vec::new(),
                 };
                 n.mass = n.compute_mass();
                 e.insert(n.clone());
@@ -502,6 +555,62 @@ impl Dendrite {
         self.notify();
         true
     }
+
+    /// Mark that node `superseding_id` obsoletes/supersedes node `superseded_id`.
+    pub fn mark_supersedes(&self, superseding_id: &str, superseded_id: &str) {
+        let mut inner = lock_inner(&self.inner);
+        if let Some(node) = inner.nodes.get_mut(superseding_id) {
+            if !node.supersedes.iter().any(|s| s == superseded_id) {
+                node.supersedes.push(superseded_id.to_string());
+            }
+        }
+    }
+
+    /// Mark mutual or directional semantic contradiction between two nodes.
+    pub fn mark_conflict(&self, node_a: &str, node_b: &str) {
+        let mut inner = lock_inner(&self.inner);
+        if let Some(a) = inner.nodes.get_mut(node_a) {
+            if !a.conflicts_with.iter().any(|c| c == node_b) {
+                a.conflicts_with.push(node_b.to_string());
+            }
+        }
+        if let Some(b) = inner.nodes.get_mut(node_b) {
+            if !b.conflicts_with.iter().any(|c| c == node_a) {
+                b.conflicts_with.push(node_a.to_string());
+            }
+        }
+    }
+
+    /// Returns the set of all node IDs or topic keys that have been superseded by newer knowledge.
+    pub fn superseded_set(&self) -> HashSet<String> {
+        let inner = lock_inner(&self.inner);
+        let mut set = HashSet::new();
+        for node in inner.nodes.values() {
+            for s in &node.supersedes {
+                set.insert(s.clone());
+            }
+        }
+        set
+    }
+
+    /// Detects pairs of conflicting nodes among a candidate set of node IDs.
+    pub fn detect_conflicts(&self, candidate_ids: &[String]) -> Vec<(String, String)> {
+        let inner = lock_inner(&self.inner);
+        let mut conflicts = Vec::new();
+        let set: HashSet<&str> = candidate_ids.iter().map(|s| s.as_str()).collect();
+
+        for id in candidate_ids {
+            if let Some(node) = inner.nodes.get(id) {
+                for conflict_target in &node.conflicts_with {
+                    if set.contains(conflict_target.as_str()) && id.as_str() < conflict_target.as_str() {
+                        conflicts.push((id.clone(), conflict_target.clone()));
+                    }
+                }
+            }
+        }
+        conflicts
+    }
+
 
 /// Canonical orbital arm position for a memory category cluster in 3D space.
 pub fn category_cluster_arm(cat: &NodeCategory) -> (f32, f32, f32) {
@@ -1196,5 +1305,35 @@ mod tests {
         let r_xz = (clamped.x * clamped.x + clamped.z * clamped.z).sqrt();
         assert!(r_xz <= 50.0, "Outer XZ radius must be clamped <= 50.0, got {}", r_xz);
         assert!(clamped.y.abs() <= 4.0, "Y-axis must be clamped <= 4.0, got {}", clamped.y);
+    }
+
+    #[test]
+    fn test_graph_topic_key_upsert_increments_revision() {
+        let g = Dendrite::new();
+        let n1 = g.upsert_with_topic(
+            "id-1",
+            Some("decision/database-engine"),
+            "Database Choice V1",
+            "Decided to use SQLite with WAL",
+            NodeType::Concept,
+            Some(vec!["sqlite".to_string()]),
+        );
+        assert_eq!(n1.id, "id-1");
+        assert_eq!(n1.revision_count, 1);
+        assert_eq!(n1.topic_key.as_deref(), Some("decision/database-engine"));
+
+        // Second upsert with different ID but same topic_key
+        let n2 = g.upsert_with_topic(
+            "id-2",
+            Some("decision/database-engine"),
+            "Database Choice V2",
+            "Decided to use SQLite with WAL + FTS5",
+            NodeType::Concept,
+            Some(vec!["sqlite".to_string(), "fts5".to_string()]),
+        );
+        assert_eq!(n2.id, "id-1", "Canonical existing node ID preserved on topic update");
+        assert_eq!(n2.revision_count, 2);
+        assert_eq!(n2.title, "Database Choice V2");
+        assert_eq!(g.len(), 1, "Graph count remains 1, no duplicate memory pollution");
     }
 }

@@ -338,6 +338,9 @@ pub fn tool_canonical_params(tool_name: &str) -> &'static [&'static str] {
         "grep" => &["pattern", "path"],
         "execute_command" => &["command"],
         "spawn_subagent" => &["instruction", "role"],
+        "memory_search" => &["query", "limit"],
+        "memory_timeline" => &["node_id", "limit"],
+        "memory_inspect" => &["node_id"],
         _ => &["arg1", "arg2"],
     }
 }
@@ -355,8 +358,12 @@ pub fn canonicalize_param_key(tool_name: &str, raw_key: &str) -> String {
         "text" | "body" | "code" | "data" | "file_content" | "c" => "content".to_string(),
         // Command aliases
         "cmd" | "exec" | "run" | "bash" | "script" => "command".to_string(),
-        // Pattern aliases
-        "query" | "regex" | "search" | "term" => "pattern".to_string(),
+        // Pattern / Query aliases
+        "query" | "regex" | "search" | "term" | "q" => {
+            if tool_name == "memory_search" { "query".to_string() } else { "pattern".to_string() }
+        }
+        // Memory Node ID aliases
+        "node_id" | "id" | "node" | "key" | "target_id" => "node_id".to_string(),
         // Target content aliases (for surgical patching)
         "target" | "find" | "search_content" | "match_text" | "old_content" | "old_text" => "target_content".to_string(),
         // Replacement content aliases
@@ -435,6 +442,12 @@ pub fn coerce_tool_arguments(tool_name: &str, args: &serde_json::Value) -> serde
                 "grep" => {
                     map.insert("pattern".to_string(), serde_json::Value::String(s.clone()));
                 }
+                "memory_search" => {
+                    map.insert("query".to_string(), serde_json::Value::String(s.clone()));
+                }
+                "memory_timeline" | "memory_inspect" => {
+                    map.insert("node_id".to_string(), serde_json::Value::String(s.clone()));
+                }
                 _ => {
                     map.insert("arg1".to_string(), serde_json::Value::String(s.clone()));
                 }
@@ -479,6 +492,9 @@ pub enum CanonicalArgs {
     Grep { pattern: String, path: Option<String> },
     ExecuteCommand { command: String },
     SpawnSubagent { instruction: String, role: Option<String> },
+    MemorySearch { query: String, limit: Option<usize> },
+    MemoryTimeline { node_id: String, limit: Option<usize> },
+    MemoryInspect { node_id: String },
     Generic { arg1: String, arg2: Option<String> },
 }
 
@@ -527,6 +543,20 @@ impl ToolCall {
                 let role = args.get("role").and_then(|v| v.as_str()).map(|s| s.to_string());
                 CanonicalArgs::SpawnSubagent { instruction, role }
             }
+            "memory_search" => {
+                let query = args.get("query").or_else(|| args.get("q")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let limit = args.get("limit").and_then(|v| v.as_u64()).map(|u| u as usize);
+                CanonicalArgs::MemorySearch { query, limit }
+            }
+            "memory_timeline" => {
+                let node_id = args.get("node_id").or_else(|| args.get("id")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let limit = args.get("limit").and_then(|v| v.as_u64()).map(|u| u as usize);
+                CanonicalArgs::MemoryTimeline { node_id, limit }
+            }
+            "memory_inspect" => {
+                let node_id = args.get("node_id").or_else(|| args.get("id")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                CanonicalArgs::MemoryInspect { node_id }
+            }
             _ => {
                 let a1 = args.get("arg1").or_else(|| args.get("path")).or_else(|| args.get("command")).and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let a2 = args.get("arg2").or_else(|| args.get("content")).and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -551,6 +581,9 @@ impl ToolCall {
             CanonicalArgs::Grep { pattern, path } => (pattern, path),
             CanonicalArgs::ExecuteCommand { command } => (command, None),
             CanonicalArgs::SpawnSubagent { instruction, role } => (instruction, role),
+            CanonicalArgs::MemorySearch { query, limit } => (query, limit.map(|l| l.to_string())),
+            CanonicalArgs::MemoryTimeline { node_id, limit } => (node_id, limit.map(|l| l.to_string())),
+            CanonicalArgs::MemoryInspect { node_id } => (node_id, None),
             CanonicalArgs::Generic { arg1, arg2 } => (arg1, arg2),
         }
     }
@@ -817,6 +850,8 @@ pub fn prune_tools_for_query(user_query: &str) -> Vec<crate::ToolDefinition> {
         && (lower.contains("file") || lower.contains(".rs") || lower.contains(".toml") || lower.contains(".md") || lower.contains("code"));
     let asks_search = words.iter().any(|&w| w == "grep" || w == "search" || w == "locate") || lower.contains("search for");
     let asks_exec = has_explicit_cmd;
+    let asks_memory = words.iter().any(|&w| w == "memory" || w == "remember" || w == "recall" || w == "timeline")
+        || lower.contains("in memory") || lower.contains("search memory") || lower.contains("memory search");
 
     for t in all_tools {
         match t.name {
@@ -824,6 +859,7 @@ pub fn prune_tools_for_query(user_query: &str) -> Vec<crate::ToolDefinition> {
             "patch_file" | "write_file" if asks_file_edit => selected.push(t),
             "grep" if asks_search => selected.push(t),
             "execute_command" if asks_exec => selected.push(t),
+            "memory_search" | "memory_timeline" | "memory_inspect" if asks_memory => selected.push(t),
             "run_gates" if lower.contains("gate") || lower.contains("check gates") || lower.contains("run gates") => selected.push(t),
             _ => {}
         }
@@ -845,6 +881,9 @@ pub fn get_tool_exemplar(tool_name: &str) -> &'static str {
         "write_file" => "```json\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"notes.txt\", \"content\": \"hello world\"}}\n```",
         "execute_command" => "```json\n{\"name\": \"execute_command\", \"arguments\": {\"command\": \"cargo check\"}}\n```",
         "grep" => "```json\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \"fn main\"}}\n```",
+        "memory_search" => "```json\n{\"name\": \"memory_search\", \"arguments\": {\"query\": \"auth tokens\"}}\n```",
+        "memory_timeline" => "```json\n{\"name\": \"memory_timeline\", \"arguments\": {\"node_id\": \"auth_rule\"}}\n```",
+        "memory_inspect" => "```json\n{\"name\": \"memory_inspect\", \"arguments\": {\"node_id\": \"auth_rule\"}}\n```",
         _ => "```json\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"Cargo.toml\"}}\n```",
     }
 }
@@ -895,6 +934,24 @@ pub fn validate_tool_call_schema(call: &ToolCall, workspace_dir: &std::path::Pat
                 .ok_or_else(|| "Missing required parameter 'command' for execute_command".to_string())?;
             if cmd.trim().is_empty() {
                 return Err("Empty command passed to execute_command".to_string());
+            }
+        }
+        "memory_search" => {
+            let q = call.arguments.get("query")
+                .or_else(|| call.arguments.get("q"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing required parameter 'query' for memory_search".to_string())?;
+            if q.trim().is_empty() {
+                return Err("Empty query passed to memory_search".to_string());
+            }
+        }
+        "memory_timeline" | "memory_inspect" => {
+            let id = call.arguments.get("node_id")
+                .or_else(|| call.arguments.get("id"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("Missing required parameter 'node_id' for {}", call.name))?;
+            if id.trim().is_empty() {
+                return Err(format!("Empty node_id passed to {}", call.name));
             }
         }
         _ => {}
@@ -1052,6 +1109,43 @@ impl LoopGuard {
             }
             LoopVerdict::Ok => Ok(()),
         }
+    }
+
+    /// Generates a structured advisory notice for small models when repetition or wandering is detected,
+    /// nudging the model toward alternative approaches before a hard circuit breaker trips.
+    pub fn advisory_notice(&self, tool: &ToolCall) -> Option<String> {
+        let res = self.tracker.check(&tool.name, &tool.arguments);
+        match res.level {
+            LoopVerdict::Warn => {
+                let preview = serde_json::to_string(&tool.arguments).unwrap_or_default();
+                let short_preview = if preview.len() > 60 {
+                    format!("{}...", &preview[..60])
+                } else {
+                    preview
+                };
+                Some(format!(
+                    "=== ADVISORY STEERING ===\n\
+                    You called tool '{}' repeatedly with identical arguments: {}.\n\
+                    Inspect previous output carefully. If it did not advance the task, switch to an alternative tool or report results directly.",
+                    tool.name, short_preview
+                ))
+            }
+            LoopVerdict::Wandering => {
+                Some(format!(
+                    "=== ADVISORY STEERING ===\n\
+                    You executed {} distinct exploratory steps with '{}'.\n\
+                    Synthesize your findings and proceed to implementation rather than continued scanning.",
+                    res.count, tool.name
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// Combined check returning Ok(Some(advisory)) or Err(veto).
+    pub fn check_with_advisory(&self, tool: &ToolCall) -> Result<Option<String>, String> {
+        self.check(tool)?;
+        Ok(self.advisory_notice(tool))
     }
 
     /// Record prospective tool call invocation before execution.
@@ -1488,6 +1582,47 @@ mod tests {
         ];
         let voted = self_consistency_majority_vote(&candidates).unwrap();
         assert_eq!(voted.name, "read_file");
+    }
+
+    #[test]
+    fn test_advisory_steerer_nudges_before_hard_veto() {
+        let mut guard = LoopGuard::new(ToolLoopTrackerOptions {
+            warning_threshold: 3,
+            critical_threshold: 5,
+            breaker_veto_streak: 3,
+            history_size: 20,
+            wandering_threshold: 6,
+            wandering_escalation: 12,
+        });
+
+        let call = ToolCall {
+            name: "read_file".into(),
+            arguments: serde_json::json!({ "path": "src/lib.rs" }),
+        };
+
+        // Call 1
+        assert!(guard.check(&call).is_ok());
+        assert_eq!(guard.advisory_notice(&call), None);
+        guard.record_call(&call);
+        guard.record_outcome(&call, "content v1");
+
+        // Call 2
+        assert!(guard.check(&call).is_ok());
+        assert_eq!(guard.advisory_notice(&call), None);
+        guard.record_call(&call);
+        guard.record_outcome(&call, "content v2");
+
+        // Call 3: hits warning_threshold (3). Check is still Ok (NOT vetoed), but advisory_notice returns steering guidance!
+        assert!(guard.check(&call).is_ok());
+        let advisory = guard.advisory_notice(&call);
+        assert!(advisory.is_some(), "Advisory notice must trigger on repeat count 3");
+        let adv_str = advisory.unwrap();
+        assert!(adv_str.contains("=== ADVISORY STEERING ==="));
+        assert!(adv_str.contains("You called tool 'read_file' repeatedly with identical arguments"));
+
+        // check_with_advisory returns Ok(Some(advisory))
+        let res = guard.check_with_advisory(&call).unwrap();
+        assert!(res.is_some());
     }
 }
 

@@ -1,6 +1,6 @@
 //! Tool Output Compressor for Cynapse Agent System.
 //!
-//! Inspired by Atomic Agent's `result-compressor.ts`:
+//! Inspired by Atomic Agent's `result-compressor.ts` & DeepSeek Harness `compaction-tool-result-pruner`:
 //! Shrinks verbose tool output (cargo build logs, test runs, grep results, file reads)
 //! into a compact summary that preserves error signatures and the trailing execution tail
 //! without exhausting small model context windows.
@@ -19,10 +19,15 @@ pub struct CompressedResult {
     pub spill_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressorOptions {
     pub max_summary_length: usize,
     pub max_tail_lines: usize,
     pub spill_threshold: usize,
+    /// Head budget for tool-result pruner (borrowed from DeepSeek Harness).
+    pub head_chars: usize,
+    /// Tail budget for tool-result pruner.
+    pub tail_chars: usize,
 }
 
 impl Default for CompressorOptions {
@@ -31,8 +36,29 @@ impl Default for CompressorOptions {
             max_summary_length: 1200,
             max_tail_lines: 20,
             spill_threshold: 1200,
+            head_chars: 400,
+            tail_chars: 400,
         }
     }
+}
+
+pub const PRUNE_MARKER: &str = "\n\n[... tool output middle pruned for small-model context ...]\n\n";
+
+/// Replay-safe, deterministic tool-output middle pruner (DeepSeek Harness paradigm).
+/// Keeps head and tail while eliding redundant middle output if over threshold.
+pub fn prune_tool_output(raw: &str, threshold_chars: usize, head_chars: usize, tail_chars: usize) -> Option<String> {
+    let char_count = raw.chars().count();
+    if char_count <= threshold_chars {
+        return None;
+    }
+    if head_chars + tail_chars >= char_count {
+        return None;
+    }
+
+    let head: String = raw.chars().take(head_chars).collect();
+    let tail: String = raw.chars().skip(char_count.saturating_sub(tail_chars)).collect();
+
+    Some(format!("{}{}{}", head, PRUNE_MARKER, tail))
 }
 
 /// Spills large raw outputs to `~/.cynapse/spill/<hash>.log` to keep model context windows lean.
@@ -140,8 +166,20 @@ pub fn compress_tool_result(raw: &str, is_error: bool, options: Option<Compresso
     let original_len = raw.len();
     let normalised = raw.replace("\r\n", "\n").trim_end().to_string();
 
-    let (tail, tail_truncated) = extract_tail(&normalised, opts.max_tail_lines);
-    let signature = extract_signature(&normalised, is_error);
+    // Stage 1: Deterministic head/tail middle-pruning (DeepSeek Harness style) if output exceeds threshold
+    let (staged_text, middle_pruned) = if let Some(pruned) = prune_tool_output(
+        &normalised,
+        opts.spill_threshold,
+        opts.head_chars,
+        opts.tail_chars,
+    ) {
+        (pruned, true)
+    } else {
+        (normalised, false)
+    };
+
+    let (tail, tail_truncated) = extract_tail(&staged_text, opts.max_tail_lines);
+    let signature = extract_signature(&staged_text, is_error);
 
     let mut parts = Vec::new();
     if let Some(ref sig) = signature {
@@ -175,7 +213,7 @@ pub fn compress_tool_result(raw: &str, is_error: bool, options: Option<Compresso
     CompressedResult {
         summary,
         signature,
-        truncated: tail_truncated || over_length || spill_path.is_some(),
+        truncated: middle_pruned || tail_truncated || over_length || spill_path.is_some(),
         original_len,
         spill_path,
     }
@@ -192,6 +230,17 @@ mod tests {
         assert_eq!(res.summary, text);
         assert!(!res.truncated);
         assert_eq!(res.signature, None);
+    }
+
+    #[test]
+    fn test_prune_tool_output_middle() {
+        let text = format!("START_DATA {} END_DATA", "x".repeat(2000));
+        let pruned = prune_tool_output(&text, 500, 20, 20);
+        assert!(pruned.is_some());
+        let val = pruned.unwrap();
+        assert!(val.starts_with("START_DATA"));
+        assert!(val.ends_with("END_DATA"));
+        assert!(val.contains(PRUNE_MARKER));
     }
 
     #[test]
@@ -223,6 +272,8 @@ mod tests {
             max_summary_length: 1000,
             max_tail_lines: 5,
             spill_threshold: 1200,
+            head_chars: 200,
+            tail_chars: 200,
         }));
         assert!(res.truncated);
         assert!(res.summary.contains("… [omitted 45 lines]"));
@@ -246,6 +297,8 @@ mod tests {
             max_summary_length: 500,
             max_tail_lines: 5,
             spill_threshold: 500,
+            head_chars: 50,
+            tail_chars: 50,
         }));
         assert!(res.spill_path.is_some());
         assert!(res.summary.contains("spilled to"));

@@ -49,6 +49,26 @@ Harden security, fix TUI UTF-8 input crashes, integrate native Leafcutter routin
   - Added micro-channel header detection in `compile_zone_b_tail`.
   - Wired `ReflectionWorker::spawn_reflection` to fire-and-forget background reflection on chat turn completion in `TuiApp`.
 
+- **Stage 11: SLM-Focused Harness & Dendrite Memory Overhaul [DONE]**
+  - **Substage 11.1: Dendrite Topic-Key Upsert Engine (`cynapse-memory`) [DONE]**
+    `OWNS: memory/cynapse-memory/src/graph.rs, memory/cynapse-memory/src/store.rs`
+    `GATES: G34`
+    - Hierarchical kebab-case `topic_key` and `revision_count` in `Node` and `dendrite_nodes` SQLite schema.
+    - Zero-fragmentation in-place updates on matching topic keys in memory and persistent storage.
+  - **Substage 11.2: Dendrite Contradiction & Supersede Detector (`cynapse-memory`) [DONE]**
+    `OWNS: memory/cynapse-memory/src/graph.rs, memory/cynapse-memory/src/context.rs`
+    `GATES: G35`
+    - Knowledge relation mapping (`conflicts_with`, `supersedes`) and Zone B contradiction notice injection.
+  - **Substage 11.3: 3-Layer Progressive Disclosure Tools (`cynapse-core`) [DONE]**
+    `OWNS: harness/cynapse-core/src/lib.rs, harness/cynapse-core/src/offline_agent.rs`
+    `GATES: G36`
+    - Interactive `memory_search`, `memory_timeline`, and `memory_inspect` tools to minimize context window load.
+  - **Substage 11.4: SLM Advisory Repeat Steerer (`cynapse-core`) [DONE]**
+    `OWNS: harness/cynapse-core/src/offline_agent.rs`
+    `GATES: G37`
+    - Multi-stage advisory notices on repeated calls before tripping hard circuit breakers.
+
+
 - **Stage 11: Batch Tool Call Array Execution (`cynapse-core`, `cynapse-tui`) [DONE]**
   `OWNS: harness/cynapse-tui/src/app.rs, harness/cynapse-core/src/offline_agent.rs`
   - Integrated `validate_gbnf_tool_calls` in `app.rs` to support multi-tool arrays and single tool objects seamlessly.

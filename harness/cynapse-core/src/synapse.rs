@@ -39,6 +39,17 @@ pub struct SynapseToolDef {
     pub input_schema: Option<serde_json::Value>,
 }
 
+/// Lifecycle hook signatures for Synapse extensions (DeepSeek Harness / Cordis paradigm).
+pub type BeforeToolHook = Arc<dyn Fn(&str, &serde_json::Value) -> Result<()> + Send + Sync>;
+pub type AfterToolHook = Arc<dyn Fn(&str, &str) -> Result<String> + Send + Sync>;
+
+/// Execution pipeline lifecycle hooks container.
+#[derive(Default)]
+pub struct SynapseLifecycleHooks {
+    pub before_tool: Vec<BeforeToolHook>,
+    pub after_tool: Vec<AfterToolHook>,
+}
+
 fn default_transport() -> String {
     "stdio".to_string()
 }
@@ -51,6 +62,7 @@ fn default_concurrency_safe() -> bool {
 pub struct SynapseRegistry {
     synapses_dir: PathBuf,
     manifests: Mutex<HashMap<String, SynapseManifest>>,
+    hooks: Mutex<SynapseLifecycleHooks>,
 }
 
 static REGISTRY: OnceLock<Arc<SynapseRegistry>> = OnceLock::new();
@@ -66,11 +78,32 @@ impl SynapseRegistry {
                 let reg = Self {
                     synapses_dir: dir,
                     manifests: Mutex::new(HashMap::new()),
+                    hooks: Mutex::new(SynapseLifecycleHooks::default()),
                 };
                 reg.reload();
                 Arc::new(reg)
             })
             .clone()
+    }
+
+    /// Registers a before-tool-execution lifecycle hook.
+    pub fn register_before_tool<F>(&self, hook: F)
+    where
+        F: Fn(&str, &serde_json::Value) -> Result<()> + Send + Sync + 'static,
+    {
+        if let Ok(mut h) = self.hooks.lock() {
+            h.before_tool.push(Arc::new(hook));
+        }
+    }
+
+    /// Registers an after-tool-execution lifecycle hook.
+    pub fn register_after_tool<F>(&self, hook: F)
+    where
+        F: Fn(&str, &str) -> Result<String> + Send + Sync + 'static,
+    {
+        if let Ok(mut h) = self.hooks.lock() {
+            h.after_tool.push(Arc::new(hook));
+        }
     }
 
     /// Reloads all installed Synapse manifests from ~/.cynapse/synapses/
@@ -179,18 +212,35 @@ impl SynapseRegistry {
             let _ = stdin.write_all(arg_json.as_bytes());
         }
 
+        // Lifecycle hook: before_tool_exec
+        if let Ok(hooks) = self.hooks.lock() {
+            for hook in &hooks.before_tool {
+                hook(tool_name, arguments)?;
+            }
+        }
+
         let output = child.wait_with_output().context("Waiting for synapse tool process")?;
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
-        if output.status.success() {
+        let raw_result = if output.status.success() {
             if stdout.is_empty() && !stderr.is_empty() {
-                Ok(stderr)
+                stderr
             } else {
-                Ok(stdout)
+                stdout
             }
         } else {
             bail!("Synapse tool exited with error ({}):\n{}", output.status, stderr)
+        };
+
+        // Lifecycle hook: after_tool_exec
+        let mut final_result = raw_result;
+        if let Ok(hooks) = self.hooks.lock() {
+            for hook in &hooks.after_tool {
+                final_result = hook(tool_name, &final_result)?;
+            }
         }
+
+        Ok(final_result)
     }
 }

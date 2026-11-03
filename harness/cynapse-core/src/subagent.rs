@@ -441,7 +441,11 @@ where
                             }
 
                             loop_guard.record_outcome(call, &output_str);
-                            batch_results.push(format!("[{}]\n{}", call.name, output_str));
+                            let mut res_str = format!("[{}]\n{}", call.name, output_str);
+                            if let Some(advisory) = loop_guard.advisory_notice(call) {
+                                res_str.push_str(&format!("\n\n{}", advisory));
+                            }
+                            batch_results.push(res_str);
                         }
                         Err(veto) => {
                             loop_guard.record_veto(call);

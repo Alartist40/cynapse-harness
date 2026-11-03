@@ -70,6 +70,21 @@ pub fn list_tools() -> Vec<ToolDefinition> {
             description: "Spawn a delegated autonomous subagent task with optional bot profile and wait mode",
             concurrency_safe: false,
         },
+        ToolDefinition {
+            name: "memory_search",
+            description: "Search Dendrite memory graph for compact pointers (IDs, titles, tags) without context blowup",
+            concurrency_safe: true,
+        },
+        ToolDefinition {
+            name: "memory_timeline",
+            description: "View chronological sequence of memory nodes around a given node ID to trace decisions",
+            concurrency_safe: true,
+        },
+        ToolDefinition {
+            name: "memory_inspect",
+            description: "Inspect the full content and metadata of a specific memory node by ID",
+            concurrency_safe: true,
+        },
     ]
 }
 
@@ -228,6 +243,23 @@ pub fn patch_file_at(
     ))
 }
 
+/// Resolves the active Dendrite SQLite database path.
+pub fn resolve_dendrite_db_path() -> PathBuf {
+    if let Ok(custom) = std::env::var("CYNAPSE_DENDRITE_DB") {
+        return PathBuf::from(custom);
+    }
+    if PathBuf::from("data/dendrite.db").exists() {
+        return PathBuf::from("data/dendrite.db");
+    }
+    if let Some(home) = dirs::home_dir() {
+        let p = home.join(".cynapse").join("dendrite.db");
+        if p.exists() {
+            return p;
+        }
+    }
+    PathBuf::from("data/dendrite.db")
+}
+
 /// Native implementation of atomic-agent tools with sandboxing and execution timeout.
 pub fn execute_tool(name: &str, arg1: &str, arg2: Option<&str>) -> Result<String> {
     match name {
@@ -360,6 +392,89 @@ pub fn execute_tool(name: &str, arg1: &str, arg2: Option<&str>) -> Result<String
 
             let _ = child.kill();
             bail!("Command timed out after 10 seconds: {}", trimmed);
+        }
+        "memory_search" => {
+            let query = arg1.trim();
+            let limit = arg2.and_then(|s| s.parse::<usize>().ok()).unwrap_or(5).clamp(1, 10);
+            let db_path = resolve_dendrite_db_path();
+            if !db_path.exists() {
+                return Ok(format!("No Dendrite database found at {}", db_path.display()));
+            }
+            let store = cynapse_memory::store::DendriteStore::open(&db_path)?;
+            let results = store.fts_search_calibrated(query, limit, None)?;
+            if results.is_empty() {
+                return Ok(format!("No memory records found for query '{}'", query));
+            }
+            let graph = cynapse_memory::graph::Dendrite::new();
+            store.load_all(&graph)?;
+            let mut lines = Vec::new();
+            for (id, rank) in results {
+                if let Some(node) = graph.get(&id) {
+                    let tags_str = if node.tags.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", node.tags.join(", "))
+                    };
+                    let topic = node.topic_key.map(|k| format!(" key={}", k)).unwrap_or_default();
+                    lines.push(format!("- #{} ({}) {}{}{} (bm25: {:.2})", node.id, node.node_type.label(), node.title, tags_str, topic, rank));
+                } else {
+                    lines.push(format!("- #{} (bm25: {:.2})", id, rank));
+                }
+            }
+            Ok(lines.join("\n"))
+        }
+        "memory_timeline" => {
+            let target_id = arg1.trim();
+            let limit = arg2.and_then(|s| s.parse::<usize>().ok()).unwrap_or(5).clamp(1, 15);
+            let db_path = resolve_dendrite_db_path();
+            if !db_path.exists() {
+                return Ok(format!("No Dendrite database found at {}", db_path.display()));
+            }
+            let store = cynapse_memory::store::DendriteStore::open(&db_path)?;
+            let graph = cynapse_memory::graph::Dendrite::new();
+            store.load_all(&graph)?;
+            let target = graph.get(target_id).ok_or_else(|| anyhow::anyhow!("Node '{}' not found in memory", target_id))?;
+            let mut all_nodes = graph.all();
+            all_nodes.sort_by_key(|n| n.updated_at);
+            let pos = all_nodes.iter().position(|n| n.id == target.id).unwrap_or(0);
+            let start = pos.saturating_sub(limit / 2);
+            let end = (start + limit).min(all_nodes.len());
+            let mut lines = vec![format!("Timeline window around #{}:", target_id)];
+            for n in &all_nodes[start..end] {
+                let marker = if n.id == target.id { ">>>" } else { "   " };
+                lines.push(format!("{} #{} [{}] {} (rev: {})", marker, n.id, n.node_type.label(), n.title, n.revision_count));
+            }
+            Ok(lines.join("\n"))
+        }
+        "memory_inspect" => {
+            let target_id = arg1.trim();
+            let db_path = resolve_dendrite_db_path();
+            if !db_path.exists() {
+                return Ok(format!("No Dendrite database found at {}", db_path.display()));
+            }
+            let store = cynapse_memory::store::DendriteStore::open(&db_path)?;
+            let graph = cynapse_memory::graph::Dendrite::new();
+            store.load_all(&graph)?;
+            let node = graph.get(target_id).ok_or_else(|| anyhow::anyhow!("Node '{}' not found in memory", target_id))?;
+            let mut out = Vec::new();
+            out.push(format!("ID: #{}", node.id));
+            out.push(format!("Title: {}", node.title));
+            out.push(format!("Type: {}", node.node_type.label()));
+            if let Some(ref tk) = node.topic_key {
+                out.push(format!("Topic Key: {}", tk));
+            }
+            out.push(format!("Revision: {}", node.revision_count));
+            if !node.tags.is_empty() {
+                out.push(format!("Tags: {}", node.tags.join(", ")));
+            }
+            if !node.supersedes.is_empty() {
+                out.push(format!("Supersedes: {}", node.supersedes.join(", ")));
+            }
+            if !node.conflicts_with.is_empty() {
+                out.push(format!("Conflicts With: {}", node.conflicts_with.join(", ")));
+            }
+            out.push(format!("\nContent:\n{}", node.content));
+            Ok(out.join("\n"))
         }
         _ => {
             // Check dynamic Synapse extensions
@@ -521,6 +636,15 @@ pub fn execute_tool_call(call: &offline_agent::ToolCall) -> Result<String> {
         }
         offline_agent::CanonicalArgs::SpawnSubagent { instruction, role } => {
             execute_tool("spawn_subagent", &instruction, role.as_deref())
+        }
+        offline_agent::CanonicalArgs::MemorySearch { query, limit } => {
+            execute_tool("memory_search", &query, limit.map(|l| l.to_string()).as_deref())
+        }
+        offline_agent::CanonicalArgs::MemoryTimeline { node_id, limit } => {
+            execute_tool("memory_timeline", &node_id, limit.map(|l| l.to_string()).as_deref())
+        }
+        offline_agent::CanonicalArgs::MemoryInspect { node_id } => {
+            execute_tool("memory_inspect", &node_id, None)
         }
         offline_agent::CanonicalArgs::Generic { arg1, arg2 } => {
             execute_tool(&call.name, &arg1, arg2.as_deref())
@@ -783,5 +907,59 @@ mod tests {
         let blocked_res = execute_tool_with_profile("execute_command", "rm -rf /", None, &open_profile);
         assert!(blocked_res.is_err());
         assert!(blocked_res.unwrap_err().to_string().contains("Security shield violation"));
+    }
+
+    #[test]
+    fn test_progressive_memory_disclosure_tools() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("test_dendrite.db");
+        std::env::set_var("CYNAPSE_DENDRITE_DB", db_path.to_str().unwrap());
+
+        let store = cynapse_memory::store::DendriteStore::open(&db_path).unwrap();
+        let mut n1 = cynapse_memory::graph::Node::placeholder("node_auth".to_string(), 100);
+        n1.title = "Authentication Token Architecture".to_string();
+        n1.content = "Detailed secret signing and rotation procedure for JWTs.".to_string();
+        n1.node_type = cynapse_memory::graph::NodeType::Procedure;
+        n1.topic_key = Some("architecture/auth-tokens".to_string());
+        n1.tags = vec!["auth".to_string(), "security".to_string()];
+        store.save(&n1).unwrap();
+
+        let mut n2 = cynapse_memory::graph::Node::placeholder("node_db".to_string(), 200);
+        n2.title = "Database Engine Selection".to_string();
+        n2.content = "SQLite with WAL mode and FTS5 ranking.".to_string();
+        n2.node_type = cynapse_memory::graph::NodeType::Concept;
+        n2.topic_key = Some("architecture/database".to_string());
+        store.save(&n2).unwrap();
+
+        // 1. Layer 1: memory_search (compact list, no raw content dump)
+        let call_search = offline_agent::ToolCall {
+            name: "memory_search".to_string(),
+            arguments: serde_json::json!({ "query": "Authentication" }),
+        };
+        let search_res = execute_tool_call(&call_search).unwrap();
+        assert!(search_res.contains("#node_auth"));
+        assert!(search_res.contains("Authentication Token Architecture"));
+        assert!(!search_res.contains("Detailed secret signing"), "Raw content must not leak into search results");
+
+        // 2. Layer 2: memory_timeline (chronological sequence around node)
+        let call_timeline = offline_agent::ToolCall {
+            name: "memory_timeline".to_string(),
+            arguments: serde_json::json!({ "node_id": "node_auth" }),
+        };
+        let timeline_res = execute_tool_call(&call_timeline).unwrap();
+        assert!(timeline_res.contains("Timeline window around #node_auth:"));
+        assert!(timeline_res.contains("#node_auth"));
+
+        // 3. Layer 3: memory_inspect (full content on demand)
+        let call_inspect = offline_agent::ToolCall {
+            name: "memory_inspect".to_string(),
+            arguments: serde_json::json!({ "node_id": "node_auth" }),
+        };
+        let inspect_res = execute_tool_call(&call_inspect).unwrap();
+        assert!(inspect_res.contains("ID: #node_auth"));
+        assert!(inspect_res.contains("Topic Key: architecture/auth-tokens"));
+        assert!(inspect_res.contains("Detailed secret signing and rotation procedure for JWTs."));
+
+        std::env::remove_var("CYNAPSE_DENDRITE_DB");
     }
 }

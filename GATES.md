@@ -174,3 +174,24 @@
   CHECK: cargo test --workspace 2>/dev/null && echo "G33 PASS"
   EXPECT: G33 PASS
   EVIDENCE: 324 tests passed (0 failed). Tolerant argument coercion + Levenshtein nearest-key hints (<=2), surgical patch_file tool, deterministic GATES.md engine, dynamic micro-skill Zone B slicing, 5-item listing caps, disk spillover, and autonomous security shield verified.
+
+- [x] G34: Topic-Key Upsert Engine in Dendrite (cynapse-memory)
+  CHECK: cargo test -p cynapse-memory topic_key -- --nocapture && echo "G34 PASS"
+  EXPECT: G34 PASS
+  EVIDENCE: 2 passed (0 failed). In-memory and SQLite in-place updates with incremented `revision_count` verified without memory fragmentation.
+
+- [x] G35: Semantic Contradiction & Supersede Detector (cynapse-memory)
+  CHECK: cargo test -p cynapse-memory contradiction -- --nocapture && echo "G35 PASS"
+  EXPECT: G35 PASS
+  EVIDENCE: 1 passed (0 failed). Obsolete superseded memories automatically pruned from Zone B prompt assembly; contradictory candidate pairs surface structured `=== CONTRADICTION NOTICE ===` to prevent SLM reasoning traps.
+
+- [x] G36: 3-Layer Progressive Disclosure Tools (cynapse-core)
+  CHECK: cargo test -p cynapse-core progressive_memory -- --nocapture && echo "G36 PASS"
+  EXPECT: G36 PASS
+  EVIDENCE: 1 passed (0 failed). `memory_search` (compact pointers), `memory_timeline` (session sequence window), and `memory_inspect` (untruncated content) active in tool registry, canonical argument coerces, and GBNF schema critics.
+
+- [x] G37: SLM Advisory Repeat Steerer in ToolLoopTracker (cynapse-core)
+  CHECK: cargo test -p cynapse-core advisory_steerer -- --nocapture && echo "G37 PASS"
+  EXPECT: G37 PASS
+  EVIDENCE: 1 passed (0 failed). Non-blocking `advisory_notice` and `check_with_advisory` return structured steering guidance on repeated calls before tripping hard circuit breakers.
+

@@ -3080,7 +3080,11 @@ impl TuiApp {
                                                     self.turn_verified = false;
                                                 }
                                                 self.loop_guard.record_outcome(tool_call, &tool_output);
-                                                tool_results.push(format!("[{}]\n{}", tool_call.name, tool_output));
+                                                let mut formatted_res = format!("[{}]\n{}", tool_call.name, tool_output);
+                                                if let Some(advisory) = self.loop_guard.advisory_notice(tool_call) {
+                                                    formatted_res.push_str(&format!("\n\n{}", advisory));
+                                                }
+                                                tool_results.push(formatted_res);
                                             }
                                             Err(loop_warn) => {
                                                 self.turn_verified = false;

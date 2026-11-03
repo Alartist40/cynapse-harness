@@ -126,6 +126,16 @@ Docs brought current: README (MAX_AGENT_STEPS 14, 14-check doctor + exit-1, inst
   3. **Verification**:
      - Executed `./target/release/cynapse doctor`: 22 Pass | 0 Warning | 0 Failed (100% health score).
 
+## [Stage 11: SLM-Focused Harness & Dendrite Memory Overhaul]
+- Action:
+  1. Implemented Dendrite Topic-Key Upsert Engine in `cynapse-memory`: added `topic_key` and `revision_count` to `Node` and SQLite schema with unique indexing and in-place updates.
+  2. Implemented Semantic Contradiction & Supersede Detector in `cynapse-memory`: added `supersedes` and `conflicts_with` relations, pruned obsolete memories from Zone B prompt assembly, and surfaced `=== CONTRADICTION NOTICE ===` for conflicting candidates.
+  3. Implemented 3-Layer Progressive Disclosure Tools in `cynapse-core`: added `memory_search` (compact pointers), `memory_timeline` (temporal sequence), and `memory_inspect` (untruncated content) with GBNF argument coercion and critics.
+  4. Implemented SLM Advisory Repeat Steerer in `cynapse-core/offline_agent.rs`: added non-blocking `advisory_notice` and `check_with_advisory` in `LoopGuard`, piped guidance into tool responses in `TuiApp` and `run_subagent_loop`.
+- Decision & Rationale: Small language models suffer severe attention degradation and reasoning oscillation when presented with contradictory context or massive raw tool outputs. Structured topic upserts eliminate memory fragmentation; contradiction warnings prevent reasoning traps; progressive disclosure caps token consumption; and advisory repeat steering prevents premature loop termination.
+- Deviations: None.
+- Next: Final acceptance gate review and presentation to user.
+
 ## 2026-10-30 — Session: Sovereign Local Inference & Speculative Decoding Engine (Stage 38)
 - Scope: Purged all external Ollama dependencies and unified local inference:
   1. **Ollama Endpoint Purge**:
@@ -160,3 +170,13 @@ Docs brought current: README (MAX_AGENT_STEPS 14, 14-check doctor + exit-1, inst
      - Compiled clean release binary `./target/release/cynapse` (9.3 MB standalone).
      - Verified all 78 tests passing in `cynapse-core` (0 failures).
      - Executed `./target/release/cynapse doctor`: 22 Pass | 0 Warning | 0 Failed (100% health score).
+
+## [Stage 11: SLM-Focused Harness & Dendrite Memory Overhaul]
+- Action:
+  1. Implemented Dendrite Topic-Key Upsert Engine in `cynapse-memory`: added `topic_key` and `revision_count` to `Node` and SQLite schema with unique indexing and in-place updates.
+  2. Implemented Semantic Contradiction & Supersede Detector in `cynapse-memory`: added `supersedes` and `conflicts_with` relations, pruned obsolete memories from Zone B prompt assembly, and surfaced `=== CONTRADICTION NOTICE ===` for conflicting candidates.
+  3. Implemented 3-Layer Progressive Disclosure Tools in `cynapse-core`: added `memory_search` (compact pointers), `memory_timeline` (temporal sequence), and `memory_inspect` (untruncated content) with GBNF argument coercion and critics.
+  4. Implemented SLM Advisory Repeat Steerer in `cynapse-core/offline_agent.rs`: added non-blocking `advisory_notice` and `check_with_advisory` in `LoopGuard`, piped guidance into tool responses in `TuiApp` and `run_subagent_loop`.
+- Decision & Rationale: Small language models suffer severe attention degradation and reasoning oscillation when presented with contradictory context or massive raw tool outputs. Structured topic upserts eliminate memory fragmentation; contradiction warnings prevent reasoning traps; progressive disclosure caps token consumption; and advisory repeat steering prevents premature loop termination.
+- Deviations: None.
+- Next: Final acceptance gate review and presentation to user.
