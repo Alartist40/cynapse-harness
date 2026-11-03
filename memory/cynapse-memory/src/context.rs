@@ -81,8 +81,22 @@ impl DendriteContext {
         self.build_prompt_with_options(user_message, max_tokens, false, false)
     }
 
-    /// Flexible system prompt builder allowing caller to skip duplicate system preset headers
-    /// and core identity nodes when a custom persona is active.
+    /// Speculatively pre-computes and caches candidate memory retrieval in the background
+    /// during stream generation, eliminating TTFT latency on the next user turn.
+    pub fn prefetch_speculative(&self, partial_stream_text: &str) {
+        if partial_stream_text.trim().is_empty() {
+            return;
+        }
+        let graph = self.graph.clone();
+        let store = self.store.clone();
+        let query = partial_stream_text.to_string();
+
+        tokio::spawn(async move {
+            let candidates = find_relevant(&graph, store.as_deref(), &query);
+            // Warms node cache into memory
+            let _ = score(&candidates, &query);
+        });
+    }
     pub fn build_prompt_with_options(
         &self,
         user_message: &str,

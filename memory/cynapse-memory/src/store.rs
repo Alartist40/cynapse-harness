@@ -499,6 +499,48 @@ impl DendriteStore {
         let status: String = conn.query_row("PRAGMA quick_check;", [], |r| r.get(0))?;
         Ok(status)
     }
+
+    /// Garbage collector: auto-prunes unreferenced transient turn logs older than `retention_days`
+    /// while strictly preserving high-mass Core, Concept, Identity, and Lesson nodes.
+    /// Returns the number of pruned dead rows.
+    pub fn prune_dead_memories(&self, retention_days: i64) -> Result<usize> {
+        self.fence.check()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let cutoff = now.saturating_sub(retention_days * 86400);
+
+        let mut conn = lock_conn(&self.conn);
+        let tx = conn.transaction()?;
+
+        // Only prune transient types (TurnLog, Memory) that are older than cutoff and have no backlinks
+        let deleted_count = tx.execute(
+            r#"
+            DELETE FROM dendrite_nodes
+            WHERE (type = 'turn_log' OR type = 'memory')
+              AND updated_at < ?
+              AND backlinks = '[]'
+            "#,
+            params![cutoff],
+        )?;
+
+        if deleted_count > 0 && !self.has_fts {
+            tx.execute(
+                r#"
+                DELETE FROM dendrite_fts_fallback
+                WHERE id NOT IN (SELECT id FROM dendrite_nodes)
+                "#,
+                [],
+            )?;
+        }
+
+        tx.commit()?;
+        if deleted_count > 0 {
+            self.fence.inc();
+        }
+        Ok(deleted_count)
+    }
 }
 
 #[cfg(test)]
@@ -530,6 +572,20 @@ mod tests {
         let filtered = store.fts_search_calibrated("Authentication", 5, Some(-999.0))?;
         // If threshold is an impossibly low score, no results should leak to the small model
         assert!(filtered.is_empty());
+
+        // Test dead memory pruning
+        let mut old_turn = Node::placeholder("turn-old".to_string(), 10);
+        old_turn.node_type = NodeType::TurnLog;
+        old_turn.updated_at = 10;
+        store.save(&old_turn)?;
+
+        let count_before = store.node_count()?;
+        assert!(count_before >= 2);
+
+        let pruned = store.prune_dead_memories(7)?;
+        assert_eq!(pruned, 1);
+        let count_after = store.node_count()?;
+        assert_eq!(count_after, count_before - 1);
 
         Ok(())
     }

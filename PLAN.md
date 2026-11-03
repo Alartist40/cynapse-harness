@@ -285,6 +285,14 @@ Working tree already contains, in `cynapse.toml` + `engine/cynapse-engine/src/li
   - Compiled optimized 9.3 MB standalone production binary `./target/release/cynapse`.
   - Verified 100% Doctor Health Score (22 Pass | 0 Warning | 0 Failed) and all 78 tests passing.
 
+- **Stage 35: 5 Core Architectural Vectors [IN PROGRESS]**
+  `OWNS: memory/cynapse-memory/src/store.rs, memory/cynapse-memory/src/context.rs, harness/cynapse-core/src/offline_agent.rs, harness/cynapse-tui/src/app.rs, ~/.cynapse/synapses/soup/`
+  - Vector 1: Soup Synapse Tool Extension (Fine-Tuning & Dataset Doctor) [DONE]
+  - Vector 2: Speculative Memory Prefetcher in `cynapse-memory/context.rs` [PENDING]
+  - Vector 3: Compact ASCII Breadcrumb & Paraclea Widget in `cynapse-tui` [PENDING]
+  - Vector 4: Epistemic Confidence Decay & Dead-Memory GC in `cynapse-memory/store.rs` [PENDING]
+  - Vector 5: GBNF Tool Critic Pipeline for Tiny Models in `cynapse-core/offline_agent.rs` [PENDING]
+
 ## Out of scope (deferred, recorded not dropped)
 - P2 table: app.rs 230 KB split, ripgrep fast path, eval_count tok/s parsing, per-provider payload generation beyond sampling(), Ollama llama.cpp-only field removal.
 - Native RoPE/q_proj/pair-convention math rewrite — research track; arch-refusal (stage 26) contains the blast radius until the parity harness (stage 30) exists.

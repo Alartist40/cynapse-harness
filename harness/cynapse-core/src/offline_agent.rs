@@ -424,9 +424,18 @@ pub fn coerce_tool_arguments(tool_name: &str, args: &serde_json::Value) -> serde
             serde_json::Value::Object(coerced)
         }
         serde_json::Value::String(s) => {
-            let trimmed = s.trim();
+            let mut trimmed = s.trim().to_string();
+            // Tiny Model repair: Fix markdown JSON blocks or missing trailing braces emitted by 0.5B-1.5B models
+            if trimmed.starts_with("```json") {
+                trimmed = trimmed.trim_start_matches("```json").trim_end_matches("```").trim().to_string();
+            } else if trimmed.starts_with("```") {
+                trimmed = trimmed.trim_start_matches("```").trim_end_matches("```").trim().to_string();
+            }
+            if trimmed.starts_with('{') && !trimmed.ends_with('}') {
+                trimmed.push('}');
+            }
             if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&trimmed) {
                     return coerce_tool_arguments(tool_name, &val);
                 }
             }

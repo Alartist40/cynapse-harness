@@ -3595,14 +3595,14 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     if self.is_generating {
                         let wave = self.render_sparkline();
                         if let Some(ttft) = self.last_ttft_ms {
-                            format!("Perf: {:.1} t/s (TTFT: {}ms) {}", self.last_tok_per_sec, ttft, wave)
+                            format!("[:::···] {:.1} t/s (TTFT: {}ms) {}", self.last_tok_per_sec, ttft, wave)
                         } else {
-                            format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, wave)
+                            format!("[:::···] {:.1} t/s {}", self.last_tok_per_sec, wave)
                         }
                     } else if self.last_tok_per_sec > 0.0 {
-                        format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, self.render_sparkline())
+                        format!("[·····] {:.1} t/s {}", self.last_tok_per_sec, self.render_sparkline())
                     } else {
-                        format!("Perf: idle {}", self.render_sparkline())
+                        format!("[·····] idle {}", self.render_sparkline())
                     },
                     if self.is_generating {
                         Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)
