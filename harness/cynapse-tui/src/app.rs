@@ -3344,13 +3344,19 @@ impl TuiApp {
             "⡀⣀⣤⣤⣀⡀",
         ];
 
+        // Wall-clock time pacing: immune to terminal refresh rate fluctuations
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as usize)
+            .unwrap_or_else(|_| self.anim_tick * 30);
+
         if self.is_generating || self.last_tok_per_sec > 0.0 {
-            // Calm, rhythmic wave: 8 ticks per frame (~240ms/frame, ~1.4s cycle)
-            let idx = (self.anim_tick / 8) % WAVES_ACTIVE.len();
+            // Calm, relaxed wave: 500ms per frame (3.0s complete cycle, half previous speed)
+            let idx = (millis / 500) % WAVES_ACTIVE.len();
             format!("[{}]", WAVES_ACTIVE[idx])
         } else {
-            // Very gentle idle breathing wave: 16 ticks per frame (~480ms/frame)
-            let idx = (self.anim_tick / 16) % WAVES_IDLE.len();
+            // Very gentle ambient idle wave: 1000ms per frame (4.0s cycle)
+            let idx = (millis / 1000) % WAVES_IDLE.len();
             format!("[{}]", WAVES_IDLE[idx])
         }
     }
