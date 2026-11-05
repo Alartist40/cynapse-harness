@@ -177,7 +177,7 @@ async fn main() -> Result<()> {
                     use std::io::Write;
                     let _ = std::io::stdout().flush();
                     let mut input = String::new();
-                    if let Ok(_) = std::io::stdin().read_line(&mut input) {
+                    if std::io::stdin().read_line(&mut input).is_ok() {
                         let choice = input.trim().to_lowercase();
                         if choice == "r" {
                             println!("\n🔧 Launching automatic self-healing remediation...");

@@ -227,6 +227,7 @@ fn apply_group_norm(x: &mut Tensor, seq_len: usize, channels: usize, num_groups:
 
 /// Adaptive matmul when inner dims don't match.
 /// Maps source channels to target channels via simple pooling.
+#[cfg(test)]
 fn adaptive_matmul(x: &Tensor, w: &Tensor, target_hidden: usize) -> Tensor {
     let seq_len = x.shape[0];
     let src_dim = x.shape[1];
@@ -278,6 +279,7 @@ fn adaptive_fallback(t: Tensor, target_hidden: usize) -> Tensor {
     Tensor::from_vec(out, vec![seq_len, target_hidden])
 }
 
+#[cfg(test)]
 fn causal_conv1d(x: &Tensor, weight: &Tensor, kernel_size: usize) -> Tensor {
     let seq_len = x.shape[0];
     let channels = x.shape[1];

@@ -23,7 +23,7 @@ fn test_model(path: &str, prompt: &str, max_tokens: usize) -> Option<ModelResult
     println!("Testing: {}", model_name);
     println!("{}", "=".repeat(70));
 
-    let rss_before = read_rss_mb();
+    let _rss_before = read_rss_mb();
     let load_start = Instant::now();
     let mut engine = match Engine::load(path) {
         Ok(e) => e,
@@ -93,6 +93,7 @@ fn test_model(path: &str, prompt: &str, max_tokens: usize) -> Option<ModelResult
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ModelResult {
     name: String,
     arch: String,

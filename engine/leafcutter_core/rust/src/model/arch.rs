@@ -404,7 +404,6 @@ mod tests {
     use super::*;
 
     fn write_minimal_gguf(path: &str, arch: &str) {
-        use std::io::Write;
         let mut buf: Vec<u8> = Vec::new();
         // Magic
         buf.extend_from_slice(&0x46554747u32.to_le_bytes());

@@ -31,28 +31,6 @@ thread_local! {
     static SCRATCH: RefCell<Vec<f32>> = RefCell::new(Vec::new());
 }
 
-/// AVX2+FMA inner loop: c_row[i..i+8] += a_val * scratch[i..i+8]
-/// for i in 0..QK_K, step 8.
-#[cfg(target_arch = "x86_64")]
-#[inline]
-unsafe fn fma_row_avx2(a_val: f32, scratch: &[f32; QK_K], c_row: &mut [f32]) {
-    use std::arch::x86_64::*;
-    assert_eq!(c_row.len(), QK_K);
-    let a_vec = _mm256_set1_ps(a_val);
-    let mut k = 0usize;
-    while k + 8 <= QK_K {
-        let s_vec = _mm256_loadu_ps(scratch.as_ptr().add(k));
-        let c_vec = _mm256_loadu_ps(c_row.as_mut_ptr().add(k));
-        let r_vec = _mm256_fmadd_ps(a_vec, s_vec, c_vec);
-        _mm256_storeu_ps(c_row.as_mut_ptr().add(k), r_vec);
-        k += 8;
-    }
-    // Tail (must be empty since QK_K % 8 == 0).
-    while k < QK_K {
-        c_row[k] += a_val * scratch[k];
-        k += 1;
-    }
-}
 
 /// Fused dequant+matmul for Q6_K with transposed-B layout.
 ///

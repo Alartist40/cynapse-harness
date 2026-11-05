@@ -390,7 +390,7 @@ fn test_llama_logits_dump() {
         println!("Model or tokenizer not found, skipping");
         return;
     }
-    let tok = Tokenizer::from_file(tok_path).unwrap();
+    let _tok = Tokenizer::from_file(tok_path).unwrap();
     let mut engine = Engine::load(model_path).unwrap();
     
     for (label, tokens) in [("nobos", vec![9906usize]), ("bos", vec![128000usize, 9906])] {
@@ -418,7 +418,7 @@ fn test_llama_embed_dump() {
     if !std::path::Path::new(model_path).exists() {
         return;
     }
-    let mut engine = Engine::load(model_path).unwrap();
+    let engine = Engine::load(model_path).unwrap();
     
     for (label, tokens) in [("nobos", vec![9906usize]), ("bos", vec![128000usize, 9906])] {
         let hidden = engine.embed_lookup_mmap(&tokens).unwrap();

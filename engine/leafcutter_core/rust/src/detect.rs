@@ -214,6 +214,25 @@ impl HardwareInfo {
             }
         }
     }
+
+    /// Plan optimal prompt ingestion chunk size based on available host RAM.
+    /// Higher values saturate SIMD GEMM batching while preventing host OOM.
+    pub fn prefill_chunk_size(&self) -> usize {
+        plan_prefill_chunk_size(self.ram_available_mb)
+    }
+}
+
+/// Dynamic prefill chunk size planner based on available host RAM.
+/// High memory systems use larger chunks (2048) to maximize GEMM arithmetic intensity,
+/// medium memory systems use 1024, and constrained systems use 512.
+pub fn plan_prefill_chunk_size(available_ram_mb: u64) -> usize {
+    if available_ram_mb >= 8192 {
+        2048
+    } else if available_ram_mb >= 4096 {
+        1024
+    } else {
+        512
+    }
 }
 
 /// Host OS as a short label. Compile-time; works on Linux, macOS, Windows,
@@ -657,6 +676,16 @@ mod tests {
         assert_eq!(parse_meminfo_kb("MemTotal:       32768 kB", "MemTotal:"), Some(32768));
         assert_eq!(parse_meminfo_kb("MemAvailable:  12345 kB", "MemAvailable:"), Some(12345));
         assert_eq!(parse_meminfo_kb("Other: 5", "MemTotal:"), None);
+    }
+
+    #[test]
+    fn test_plan_prefill_chunk_size_scaling() {
+        assert_eq!(plan_prefill_chunk_size(16384), 2048);
+        assert_eq!(plan_prefill_chunk_size(8192), 2048);
+        assert_eq!(plan_prefill_chunk_size(6144), 1024);
+        assert_eq!(plan_prefill_chunk_size(4096), 1024);
+        assert_eq!(plan_prefill_chunk_size(2048), 512);
+        assert_eq!(plan_prefill_chunk_size(512), 512);
     }
 
     #[test]

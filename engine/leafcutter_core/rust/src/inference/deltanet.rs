@@ -441,29 +441,6 @@ fn sigmoid(x: f32) -> f32 {
     1.0f32 / (1.0f32 + (-x).exp())
 }
 
-fn max_abs(data: &[f32]) -> f32 {
-    data.iter().map(|&v| v.abs()).fold(0.0f32, f32::max)
-}
-
-/// Group norm: normalize channels per-group.
-fn apply_group_norm(data: &mut [f32], seq_len: usize, channels: usize, num_groups: usize, weight: &Tensor, eps: f32) {
-    let channels_per_group = channels / num_groups;
-    for s in 0..seq_len {
-        for g in 0..num_groups {
-            let base = s * channels + g * channels_per_group;
-            let mut sq_sum = 0.0f32;
-            for c in 0..channels_per_group {
-                let v = data[base + c];
-                sq_sum += v * v;
-            }
-            let rms = (sq_sum / channels_per_group as f32 + eps).sqrt();
-            let w = weight.data[g % weight.data.len()];
-            for c in 0..channels_per_group {
-                data[base + c] = (data[base + c] / rms) * w;
-            }
-        }
-    }
-}
 
 /// Causal conv1d with state caching for autoregressive generation.
 /// `conv_state` holds the last (kernel_size - 1) inputs per channel.

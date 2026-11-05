@@ -19,6 +19,7 @@ use crate::safetensors_loader::{Shards, WeightProvider};
 use crate::gguf_provider::{self, GGUFWeightProvider};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Maximum number of sequence positions the streaming caches may hold.
 ///
@@ -97,15 +98,132 @@ fn kv_cache_append(
     Ok(new_seq)
 }
 
+/// Pre-transposed and pre-structured weights for a single layer, eliminating
+/// redundant matrix clones and per-token heap churn during layer streaming.
+pub struct PreparedStreamingLayer {
+    pub input_layernorm: Vec<f32>,
+    pub post_attention_layernorm: Vec<f32>,
+    pub mlp_gate_t: Tensor,
+    pub mlp_up_t: Tensor,
+    pub mlp_down_t: Tensor,
+
+    // Linear attention
+    pub linear_qkv_t: Option<Tensor>,
+    pub linear_conv1d: Option<Vec<f32>>,
+    pub linear_a_t: Option<Tensor>,
+    pub linear_a_log: Option<Vec<f32>>,
+    pub linear_dt_bias: Option<Vec<f32>>,
+    pub linear_b_t: Option<Tensor>,
+    pub linear_norm: Option<Vec<f32>>,
+    pub linear_z_t: Option<Tensor>,
+    pub linear_out_t: Option<Tensor>,
+
+    // Full attention
+    pub attn_q_t: Option<Tensor>,
+    pub attn_k_t: Option<Tensor>,
+    pub attn_v_t: Option<Tensor>,
+    pub attn_o_t: Option<Tensor>,
+    pub attn_q_norm: Option<Vec<f32>>,
+    pub attn_k_norm: Option<Vec<f32>>,
+}
+
+impl PreparedStreamingLayer {
+    pub fn from_map(
+        mut w: HashMap<String, Vec<f32>>,
+        layer_type: &str,
+        h: usize,
+        inter: usize,
+        n_qk: usize,
+        n_v: usize,
+        d_k: usize,
+        d_v: usize,
+        n_heads: usize,
+        head_dim: usize,
+        n_kv: usize,
+    ) -> Result<Self, String> {
+        let input_layernorm = w.remove("input_layernorm.weight").ok_or("missing input_layernorm")?;
+        let post_attention_layernorm = w.remove("post_attention_layernorm.weight").ok_or("missing post_attention_layernorm")?;
+
+        let gate_raw = w.remove("mlp.gate_proj.weight").ok_or("missing mlp.gate_proj.weight")?;
+        let up_raw = w.remove("mlp.up_proj.weight").ok_or("missing mlp.up_proj.weight")?;
+        let down_raw = w.remove("mlp.down_proj.weight").ok_or("missing mlp.down_proj.weight")?;
+
+        let mlp_gate_t = Tensor::from_vec(gate_raw, vec![inter, h]).transpose();
+        let mlp_up_t = Tensor::from_vec(up_raw, vec![inter, h]).transpose();
+        let mlp_down_t = Tensor::from_vec(down_raw, vec![h, inter]).transpose();
+
+        let conv_dim = n_qk * d_k + n_qk * d_k + n_v * d_v;
+        let v_total = n_v * d_v;
+
+        let (mut linear_qkv_t, mut linear_conv1d, mut linear_a_t, mut linear_a_log, mut linear_dt_bias, mut linear_b_t, mut linear_norm, mut linear_z_t, mut linear_out_t) =
+            (None, None, None, None, None, None, None, None, None);
+        let (mut attn_q_t, mut attn_k_t, mut attn_v_t, mut attn_o_t, mut attn_q_norm, mut attn_k_norm) =
+            (None, None, None, None, None, None);
+
+        if layer_type == "linear_attention" {
+            let qkv = w.remove("linear_attn.in_proj_qkv.weight").ok_or("missing in_proj_qkv")?;
+            linear_qkv_t = Some(Tensor::from_vec(qkv, vec![conv_dim, h]).transpose());
+            linear_conv1d = Some(w.remove("linear_attn.conv1d.weight").ok_or("missing conv1d")?);
+            let a = w.remove("linear_attn.in_proj_a.weight").ok_or("missing in_proj_a")?;
+            linear_a_t = Some(Tensor::from_vec(a, vec![n_v, h]).transpose());
+            linear_a_log = Some(w.remove("linear_attn.A_log").ok_or("missing A_log")?);
+            linear_dt_bias = Some(w.remove("linear_attn.dt_bias").ok_or("missing dt_bias")?);
+            let b = w.remove("linear_attn.in_proj_b.weight").ok_or("missing in_proj_b")?;
+            linear_b_t = Some(Tensor::from_vec(b, vec![n_v, h]).transpose());
+            linear_norm = Some(w.remove("linear_attn.norm.weight").ok_or("missing norm.weight")?);
+            let z = w.remove("linear_attn.in_proj_z.weight").ok_or("missing in_proj_z")?;
+            linear_z_t = Some(Tensor::from_vec(z, vec![v_total, h]).transpose());
+            let out = w.remove("linear_attn.out_proj.weight").ok_or("missing out_proj")?;
+            linear_out_t = Some(Tensor::from_vec(out, vec![h, v_total]).transpose());
+        } else {
+            let q = w.remove("self_attn.q_proj.weight").ok_or("missing q_proj")?;
+            attn_q_t = Some(Tensor::from_vec(q, vec![2 * h, h]).transpose());
+            let k = w.remove("self_attn.k_proj.weight").ok_or("missing k_proj")?;
+            attn_k_t = Some(Tensor::from_vec(k, vec![n_kv * head_dim, h]).transpose());
+            let v = w.remove("self_attn.v_proj.weight").ok_or("missing v_proj")?;
+            attn_v_t = Some(Tensor::from_vec(v, vec![n_kv * head_dim, h]).transpose());
+            let o = w.remove("self_attn.o_proj.weight").ok_or("missing o_proj")?;
+            attn_o_t = Some(Tensor::from_vec(o, vec![h, n_heads * head_dim]).transpose());
+            attn_q_norm = w.remove("self_attn.q_norm.weight");
+            attn_k_norm = w.remove("self_attn.k_norm.weight");
+        }
+
+        Ok(Self {
+            input_layernorm,
+            post_attention_layernorm,
+            mlp_gate_t,
+            mlp_up_t,
+            mlp_down_t,
+            linear_qkv_t,
+            linear_conv1d,
+            linear_a_t,
+            linear_a_log,
+            linear_dt_bias,
+            linear_b_t,
+            linear_norm,
+            linear_z_t,
+            linear_out_t,
+            attn_q_t,
+            attn_k_t,
+            attn_v_t,
+            attn_o_t,
+            attn_q_norm,
+            attn_k_norm,
+        })
+    }
+}
+
 pub struct StreamingOrnith {
     pub cfg: OrnithConfig,
-    pub weights: Box<dyn WeightProvider>,
+    pub weights: Arc<dyn WeightProvider>,
     pub tok: BpeTokenizer,
     /// Per-layer DeltaNet state matrices (accumulated across prompt tokens)
     pub deltanet_cache: DeltaNetStateCache,
     /// Per-layer KV cache for full_attention layers: layer_idx -> (keys, values)
     /// keys/values: flat Vec<f32> of shape [seq_len, n_kv * head_dim] each
     pub kv_cache: HashMap<usize, (Vec<f32>, Vec<f32>)>,
+    /// Optional layer progress callback (layer_idx, total_layers)
+    pub layer_callback: Option<Arc<dyn Fn(usize, usize) + Send + Sync>>,
 }
 
 impl StreamingOrnith {
@@ -115,7 +233,7 @@ impl StreamingOrnith {
         let cfg = OrnithConfig::load(dir.join("config.json").to_str().unwrap())?;
         let shards = Shards::open_dir(dir)?;
         let tok = BpeTokenizer::load(dir.join("tokenizer.json").to_str().unwrap())?;
-        Ok(Self { cfg, weights: Box::new(shards), tok, deltanet_cache: DeltaNetStateCache::new(), kv_cache: HashMap::new() })
+        Ok(Self { cfg, weights: Arc::new(shards), tok, deltanet_cache: DeltaNetStateCache::new(), kv_cache: HashMap::new(), layer_callback: None })
     }
 
     /// Open a model from a GGUF file.
@@ -140,7 +258,7 @@ impl StreamingOrnith {
         let provider = GGUFWeightProvider::from_gguf(gguf)
             .map_err(|e| format!("GGUF provider: {e}"))?;
         let tok = BpeTokenizer::load(tokenizer_path)?;
-        Ok(Self { cfg, weights: Box::new(provider), tok, deltanet_cache: DeltaNetStateCache::new(), kv_cache: HashMap::new() })
+        Ok(Self { cfg, weights: Arc::new(provider), tok, deltanet_cache: DeltaNetStateCache::new(), kv_cache: HashMap::new(), layer_callback: None })
     }
 
     /// Forward pass for ONE token. Returns logits (vocab_size entries).
@@ -167,37 +285,41 @@ impl StreamingOrnith {
             hidden_states.push(embed);
         }
 
-        // 2. Process each layer: load weights ONCE, run all tokens
+        // 2. Process each layer: load weights ONCE via double-buffered prefetch, run all tokens
+        let mut prefetcher = LayerPrefetcher::new(
+            Arc::clone(&self.weights),
+            self.cfg.clone(),
+            layer_types.clone(),
+            num_layers,
+        );
+
         for layer_idx in 0..num_layers {
+            if let Some(cb) = &self.layer_callback {
+                cb(layer_idx, num_layers);
+            }
             let layer_type = layer_types
                 .get(layer_idx)
                 .map(|s| s.as_str())
                 .unwrap_or("linear_attention");
 
-            let weights = self.load_layer_weights(layer_idx, layer_type)?;
+            let layer = prefetcher.next_layer(layer_idx)?;
 
             for pos in 0..seq_len {
                 let attn_out = if layer_type == "linear_attention" {
-                    self.deltanet_forward(&weights, &hidden_states[pos], layer_idx)?
+                    self.deltanet_forward_layer(&layer, &hidden_states[pos], layer_idx)?
                 } else {
-                    self.attention_forward(&weights, &hidden_states[pos], layer_idx, pos)?
+                    self.attention_forward_layer(&layer, &hidden_states[pos], layer_idx, pos)?
                 };
 
-                // Residual
                 let mut new_hidden = hidden_states[pos].clone();
                 for i in 0..h { new_hidden[i] += attn_out[i]; }
 
-                // Post-attention norm + MLP
-                let post_norm = weights
-                    .get("post_attention_layernorm.weight")
-                    .ok_or("missing post_attention_layernorm")?;
-                let normed = rms_norm(&new_hidden, post_norm, rms_eps);
-                let mlp_out = self.mlp_forward(&weights, &normed)?;
+                let normed = rms_norm(&new_hidden, &layer.post_attention_layernorm, rms_eps);
+                let mlp_out = self.mlp_forward_layer(&layer, &normed)?;
 
                 for i in 0..h { new_hidden[i] += mlp_out[i]; }
                 hidden_states[pos] = new_hidden;
             }
-
         }
 
         // 3. Final norm on last token
@@ -221,15 +343,12 @@ impl StreamingOrnith {
         Ok(logits)
     }
 
-    /// Forward ONE token (legacy — calls forward_sequence internally).
+    /// Forward ONE token with zero weight cloning.
     pub fn forward_one_token(
         &mut self,
         token_id: i32,
         pos: usize,
     ) -> Result<Vec<f32>, String> {
-        // forward_sequence resets caches, so we can't use it for multi-token
-        // unless we handle caching properly. For now, forward_one_token stays.
-        // Sequence cap: refuse before any weight I/O (fail-loud, no eviction).
         check_seq_len(pos + 1)?;
         let h = self.cfg.hidden_size;
         let num_layers = self.cfg.num_hidden_layers;
@@ -240,28 +359,36 @@ impl StreamingOrnith {
         let embed_name = "model.language_model.embed_tokens.weight";
         let mut hidden = self.weights.read_tensor_slice_f32(embed_name, token_id as usize * h, h)?;
 
+        // Double-buffered asynchronous layer prefetching
+        let mut prefetcher = LayerPrefetcher::new(
+            Arc::clone(&self.weights),
+            self.cfg.clone(),
+            layer_types.clone(),
+            num_layers,
+        );
+
         for layer_idx in 0..num_layers {
+            if let Some(cb) = &self.layer_callback {
+                cb(layer_idx, num_layers);
+            }
             let layer_type = layer_types
                 .get(layer_idx)
                 .map(|s| s.as_str())
                 .unwrap_or("linear_attention");
 
-            let weights = self.load_layer_weights(layer_idx, layer_type)?;
+            let layer = prefetcher.next_layer(layer_idx)?;
 
             let residual = hidden.clone();
             let attn_out = if layer_type == "linear_attention" {
-                self.deltanet_forward(&weights, &hidden, layer_idx)?
+                self.deltanet_forward_layer(&layer, &hidden, layer_idx)?
             } else {
-                self.attention_forward(&weights, &hidden, layer_idx, pos)?
+                self.attention_forward_layer(&layer, &hidden, layer_idx, pos)?
             };
 
             for i in 0..h { hidden[i] = residual[i] + attn_out[i]; }
 
-            let post_norm = weights
-                .get("post_attention_layernorm.weight")
-                .ok_or("missing post_attention_layernorm")?;
-            let normed = rms_norm(&hidden, post_norm, rms_eps);
-            let mlp_out = self.mlp_forward(&weights, &normed)?;
+            let normed = rms_norm(&hidden, &layer.post_attention_layernorm, rms_eps);
+            let mlp_out = self.mlp_forward_layer(&layer, &normed)?;
 
             for i in 0..h { hidden[i] += mlp_out[i]; }
         }
@@ -285,8 +412,47 @@ impl StreamingOrnith {
         Ok(logits)
     }
 
+    /// Forward a sequence in dynamic chunks based on memory budget.
+    pub fn forward_sequence_chunked(
+        &mut self,
+        tokens: &[i32],
+        chunk_size: usize,
+    ) -> Result<Vec<f32>, String> {
+        if tokens.is_empty() {
+            return Err("Cannot forward empty token sequence".into());
+        }
+        let chunk_size = chunk_size.max(64);
+        if tokens.len() <= chunk_size {
+            return self.forward_sequence(tokens);
+        }
+        let mut last_logits = Vec::new();
+        for chunk in tokens.chunks(chunk_size) {
+            last_logits = self.forward_sequence(chunk)?;
+        }
+        Ok(last_logits)
+    }
+
+    /// Set an optional callback triggered before each layer forward pass (layer_idx, total_layers).
+    pub fn set_layer_callback<F>(&mut self, cb: F)
+    where
+        F: Fn(usize, usize) + Send + Sync + 'static,
+    {
+        self.layer_callback = Some(Arc::new(cb));
+    }
+
+    /// Load and prepare layer weights into pre-transposed tensors with zero inner-loop cloning.
+    #[allow(dead_code)]
+    fn load_prepared_layer(
+        &self,
+        layer_idx: usize,
+        layer_type: &str,
+    ) -> Result<PreparedStreamingLayer, String> {
+        load_prepared_layer_static(&*self.weights, &self.cfg, layer_idx, layer_type)
+    }
+
     /// Load all weights for ONE layer from disk. ~13 tensors, ~400MB for 9B.
     /// These are returned as f32 and will be DROPPED after the layer computes.
+    #[allow(dead_code)]
     fn load_layer_weights(
         &self,
         layer_idx: usize,
@@ -329,13 +495,124 @@ impl StreamingOrnith {
 
         self.weights.load_layer_weights(layer_idx, layer_type, &names, &pfx)
     }
+}
 
-    /// DeltaNet (linear attention) forward — simplified.
-    /// For now, just do the QKV projection and output projection.
-    /// Full DeltaNet recurrence to be implemented next.
-    fn deltanet_forward(
+/// Static helper to load and prepare layer weights without borrowing `StreamingOrnith`.
+fn load_prepared_layer_static(
+    weights: &dyn WeightProvider,
+    cfg: &OrnithConfig,
+    layer_idx: usize,
+    layer_type: &str,
+) -> Result<PreparedStreamingLayer, String> {
+    let pfx = format!("model.language_model.layers.{layer_idx}.");
+    let names: Vec<&str> = match layer_type {
+        "linear_attention" => vec![
+            "input_layernorm.weight",
+            "linear_attn.in_proj_qkv.weight",
+            "linear_attn.in_proj_a.weight",
+            "linear_attn.in_proj_b.weight",
+            "linear_attn.in_proj_z.weight",
+            "linear_attn.conv1d.weight",
+            "linear_attn.A_log",
+            "linear_attn.dt_bias",
+            "linear_attn.norm.weight",
+            "linear_attn.out_proj.weight",
+            "post_attention_layernorm.weight",
+            "mlp.gate_proj.weight",
+            "mlp.up_proj.weight",
+            "mlp.down_proj.weight",
+        ],
+        "full_attention" => vec![
+            "input_layernorm.weight",
+            "self_attn.q_proj.weight",
+            "self_attn.k_proj.weight",
+            "self_attn.v_proj.weight",
+            "self_attn.o_proj.weight",
+            "self_attn.q_norm.weight",
+            "self_attn.k_norm.weight",
+            "post_attention_layernorm.weight",
+            "mlp.gate_proj.weight",
+            "mlp.up_proj.weight",
+            "mlp.down_proj.weight",
+        ],
+        _ => return Err(format!("unknown layer type: {layer_type}")),
+    };
+
+    let raw = weights.load_layer_weights(layer_idx, layer_type, &names, &pfx)?;
+    PreparedStreamingLayer::from_map(
+        raw,
+        layer_type,
+        cfg.hidden_size,
+        cfg.intermediate_size,
+        cfg.linear_num_key_heads,
+        cfg.linear_num_value_heads,
+        cfg.linear_key_head_dim,
+        cfg.linear_value_head_dim,
+        cfg.num_attention_heads,
+        cfg.head_dim,
+        cfg.num_key_value_heads,
+    )
+}
+
+/// Double-buffered asynchronous layer prefetcher.
+/// Overlaps background NVMe disk reads & weight prep of Layer L+1 with Layer L compute.
+struct LayerPrefetcher {
+    weights: Arc<dyn WeightProvider>,
+    cfg: OrnithConfig,
+    layer_types: Vec<String>,
+    num_layers: usize,
+    next_slot: Option<std::thread::JoinHandle<Result<PreparedStreamingLayer, String>>>,
+}
+
+impl LayerPrefetcher {
+    fn new(weights: Arc<dyn WeightProvider>, cfg: OrnithConfig, layer_types: Vec<String>, num_layers: usize) -> Self {
+        let mut prefetcher = Self {
+            weights,
+            cfg,
+            layer_types,
+            num_layers,
+            next_slot: None,
+        };
+        if num_layers > 0 {
+            prefetcher.spawn_prefetch(0);
+        }
+        prefetcher
+    }
+
+    fn spawn_prefetch(&mut self, layer_idx: usize) {
+        let w = Arc::clone(&self.weights);
+        let c = self.cfg.clone();
+        let lt = self.layer_types.get(layer_idx).cloned().unwrap_or_else(|| "linear_attention".into());
+        let handle = std::thread::spawn(move || {
+            load_prepared_layer_static(&*w, &c, layer_idx, &lt)
+        });
+        self.next_slot = Some(handle);
+    }
+
+    fn next_layer(&mut self, layer_idx: usize) -> Result<PreparedStreamingLayer, String> {
+        let layer_res = match self.next_slot.take() {
+            Some(handle) => handle.join().map_err(|e| format!("Prefetch thread join failed: {:?}", e))?,
+            None => {
+                let lt = self.layer_types.get(layer_idx).map(|s| s.as_str()).unwrap_or("linear_attention");
+                load_prepared_layer_static(&*self.weights, &self.cfg, layer_idx, lt)
+            }
+        };
+
+        let next_idx = layer_idx + 1;
+        if next_idx < self.num_layers {
+            self.spawn_prefetch(next_idx);
+        }
+
+        layer_res
+    }
+}
+
+impl StreamingOrnith {
+
+    /// DeltaNet (linear attention) forward with pre-structured zero-clone layer weights.
+    fn deltanet_forward_layer(
         &mut self,
-        w: &HashMap<String, Vec<f32>>,
+        layer: &PreparedStreamingLayer,
         hidden: &[f32],
         layer_idx: usize,
     ) -> Result<Vec<f32>, String> {
@@ -351,25 +628,16 @@ impl StreamingOrnith {
         let conv_dim = n_qk * d_k + n_qk * d_k + n_v * d_v; // 8192
 
         // 1. Input norm
-        let norm_w = w.get("input_layernorm.weight").ok_or("missing input_layernorm")?;
-        let normed = rms_norm(hidden, norm_w, rms_eps);
+        let normed = rms_norm(hidden, &layer.input_layernorm, rms_eps);
         // 2. QKV projection: [1, h] @ [conv_dim, h]^T = [1, conv_dim]
-        let qkv_w = w.get("linear_attn.in_proj_qkv.weight").ok_or("missing in_proj_qkv")?;
-        let qkv_t = Tensor::from_vec(qkv_w.clone(), vec![conv_dim, h]);
-        let hidden_t = Tensor::from_vec(normed.clone(), vec![1, h]);
-        let qkv_proj = hidden_t.matmul(&qkv_t.transpose());
+        let qkv_t = layer.linear_qkv_t.as_ref().ok_or("missing linear_qkv_t")?;
+        let hidden_t = Tensor::from_vec(normed, vec![1, h]);
+        let qkv_proj = hidden_t.matmul(qkv_t);
         // qkv_proj.data: [conv_dim] = [Q(2048) | K(2048) | V(4096)]
 
-        // 3. Conv1d: per-channel FIR filter of kernel_size=4 on the QKV sequence.
-        //    conv1d.weight: [conv_dim, 1, 4] in safetensors, stored flat as weight[c*conv_k + k].
-        //    PyTorch Conv1d padding=conv_k-1 with causal padding:
-        //      out[t][c] = sum_{k=0}^{conv_k-1} weight[c][k] * input[t - (conv_k-1) + k]
-        //    For causal streaming:
-        //      out[c] = weight[c][0]*input[t-3] + weight[c][1]*input[t-2] + weight[c][2]*input[t-1] + weight[c][3]*input[t]
-        //    The conv buffer stores [conv_dim, conv_k] as [c * conv_k + k] where k=0 is oldest, k=conv_k-1 is newest.
-        let conv_w = w.get("linear_attn.conv1d.weight").ok_or("missing conv1d")?;
+        // 3. Conv1d
+        let conv_w = layer.linear_conv1d.as_ref().ok_or("missing conv1d")?;
         let cbuf = self.deltanet_cache.get_conv_buf_mut(layer_idx, conv_dim, conv_k);
-        // Shift buffer: oldest tap 0 is discarded, taps shift left, newest tap (conv_k-1) gets current input
         for c in 0..conv_dim {
             let base = c * conv_k;
             for k in 0..conv_k - 1 {
@@ -381,10 +649,6 @@ impl StreamingOrnith {
         for c in 0..conv_dim {
             let mut sum = 0.0f32;
             let base = c * conv_k;
-            // In safetensors, weight[c][k] for tap k where k=0 is oldest, k=conv_k-1 is newest.
-            // In PyTorch Conv1d with padding=K-1: out[t] = w[0]*x[t-3] + w[1]*x[t-2] + w[2]*x[t-1] + w[3]*x[t]
-            // Our buf: [input[t-3], input[t-2], input[t-1], input[t]]
-            // So: w[c][k] * buf[k] for k=0..conv_k-1
             for k in 0..conv_k {
                 sum += conv_w[base + k] * cbuf[base + k];
             }
@@ -397,7 +661,6 @@ impl StreamingOrnith {
         let q_total = n_qk * d_k;   // 2048
         let k_total = n_qk * d_k;   // 2048
         let v_total = n_v * d_v;    // 4096
-        // Split into Q, K, V — try Q|K|V order first
         let q_data = &conv_out[..q_total];
         let k_data = &conv_out[q_total..q_total + k_total];
         let v_data = &conv_out[q_total + k_total..];
@@ -417,45 +680,37 @@ impl StreamingOrnith {
             let norm = norm_sq.sqrt().max(1e-6);
             for d in 0..d_k { k[base + d] /= norm; }
         }
-        // Scale Q by 1/sqrt(d_k)
         let scale = 1.0f32 / (d_k as f32).sqrt();
         for v in q.iter_mut() { *v *= scale; }
 
-        // 6. Compute decay rates: decay = exp(softplus(alpha + dt_bias) * A)
-        //    where alpha = hidden @ in_proj_a.weight, A = -exp(A_log)
-        let a_w = w.get("linear_attn.in_proj_a.weight").ok_or("missing in_proj_a")?;
-        let a_t = Tensor::from_vec(a_w.clone(), vec![n_v, h]);
-        let alpha = hidden_t.matmul(&a_t.transpose()); // [1, n_v]
+        // 6. Compute decay rates
+        let a_t = layer.linear_a_t.as_ref().ok_or("missing linear_a_t")?;
+        let alpha = hidden_t.matmul(a_t);
 
-        let a_log = w.get("linear_attn.A_log").ok_or("missing A_log")?;
-        let dt_bias = w.get("linear_attn.dt_bias").ok_or("missing dt_bias")?;
+        let a_log = layer.linear_a_log.as_ref().ok_or("missing A_log")?;
+        let dt_bias = layer.linear_dt_bias.as_ref().ok_or("missing dt_bias")?;
 
         let mut decay = vec![0.0f32; n_v];
         for head in 0..n_v {
             let alpha_val = alpha.data[head];
             let dt_val = dt_bias.get(head).copied().unwrap_or(0.0);
             let a_log_val = a_log.get(head).copied().unwrap_or(0.0);
-            let a = -a_log_val.exp(); // A = -exp(A_log)
+            let a = -a_log_val.exp();
             let dt = softplus(alpha_val + dt_val);
             decay[head] = (dt * a).exp();
         }
-        // 7. Compute beta gates: beta = sigmoid(hidden @ in_proj_b.weight)
-        let b_w = w.get("linear_attn.in_proj_b.weight").ok_or("missing in_proj_b")?;
-        let b_t = Tensor::from_vec(b_w.clone(), vec![n_v, h]);
-        let beta_logits = hidden_t.matmul(&b_t.transpose()); // [1, n_v]
+        // 7. Compute beta gates
+        let b_t = layer.linear_b_t.as_ref().ok_or("missing linear_b_t")?;
+        let beta_logits = hidden_t.matmul(b_t);
         let beta: Vec<f32> = beta_logits.data.iter().map(|&v| sigmoid(v)).collect();
 
         // 8. Delta rule state update + output
         let mut output = vec![0.0f32; v_total];
 
-        // Ensure state is initialized for this layer
         if self.deltanet_cache.get(layer_idx).is_none() {
             self.deltanet_cache.init_layer(layer_idx, n_v, d_v, d_k);
         }
 
-        // Qwen3.5 V-head pairing is INTERLEAVED (llama.cpp ggml_repeat_4d,
-        // llama-model.cpp:523-525): v_head h_v uses k/q head (h_v % n_qk).
-        // Pattern [k0_v0, k1_v1, k0_v2, k1_v3] for n_v=2*n_qk.
         for h_v in 0..n_v {
             let h_qk = h_v % n_qk;
             let q_h = &q[h_qk * d_k..(h_qk + 1) * d_k];
@@ -465,7 +720,6 @@ impl StreamingOrnith {
                 let decay_h = decay[h_v];
                 let beta_h = beta[h_v];
 
-                // Decay state first: S = decay_h * S
                 let state = self.deltanet_cache.get_mut(layer_idx).unwrap();
                 let state_stride = h_v * d_v * d_k;
                 for i in 0..d_v {
@@ -475,7 +729,6 @@ impl StreamingOrnith {
                     }
                 }
 
-                // Compute v_pred = S @ k (using decayed state)
                 let mut v_pred = vec![0.0f32; d_v];
                 for i in 0..d_v {
                     let mut sum = 0.0f32;
@@ -485,7 +738,6 @@ impl StreamingOrnith {
                     v_pred[i] = sum;
                 }
 
-                // State update: S = S + beta_h * ((v - v_pred) ⊗ k)
                 for i in 0..d_v {
                     let delta = v_h[i] - v_pred[i];
                     for j in 0..d_k {
@@ -494,7 +746,6 @@ impl StreamingOrnith {
                     }
                 }
 
-                // Output: o_h = S @ q (q already scaled by 1/sqrt(d_k))
                 for i in 0..d_v {
                     let mut sum = 0.0f32;
                     for j in 0..d_k {
@@ -506,7 +757,7 @@ impl StreamingOrnith {
         }
 
         // 9. Per-head RMSNorm using linear_attn.norm.weight
-        let norm_weight = w.get("linear_attn.norm.weight").ok_or("missing norm.weight")?;
+        let norm_weight = layer.linear_norm.as_ref().ok_or("missing norm.weight")?;
         for head in 0..n_v {
             let base = head * d_v;
             let mut sq_sum = 0.0f32;
@@ -516,61 +767,75 @@ impl StreamingOrnith {
                 output[base + d] = (output[base + d] / rms) * norm_weight.get(d).copied().unwrap_or(1.0);
             }
         }
-        // 10. Z-gate: z = hidden @ in_proj_z.weight, then output *= silu(z)
-        let z_w = w.get("linear_attn.in_proj_z.weight").ok_or("missing in_proj_z")?;
-        let z_t = Tensor::from_vec(z_w.clone(), vec![v_total, h]);
-        let z = hidden_t.matmul(&z_t.transpose()); // [1, v_total]
+        // 10. Z-gate
+        let z_t = layer.linear_z_t.as_ref().ok_or("missing linear_z_t")?;
+        let z = hidden_t.matmul(z_t);
         for i in 0..output.len() {
             let z_val = z.data[i];
             let silu_z = z_val * (1.0 / (1.0 + (-z_val).exp()));
             output[i] *= silu_z;
         }
 
-        // 11. Output projection: [1, v_total] @ [h, v_total]^T = [1, h]
-        let o_w = w.get("linear_attn.out_proj.weight").ok_or("missing out_proj")?;
-        let o_t = Tensor::from_vec(o_w.clone(), vec![h, v_total]);
+        // 11. Output projection
+        let o_t = layer.linear_out_t.as_ref().ok_or("missing linear_out_t")?;
         let out_t = Tensor::from_vec(output, vec![1, v_total]);
-        let result = out_t.matmul(&o_t.transpose());
+        let result = out_t.matmul(o_t);
         Ok(result.data)
     }
 
-    /// Standard attention forward (for full_attention layers).
-    fn attention_forward(
+    /// DeltaNet forward compatibility shim.
+    #[allow(dead_code)]
+    fn deltanet_forward(
         &mut self,
         w: &HashMap<String, Vec<f32>>,
+        hidden: &[f32],
+        layer_idx: usize,
+    ) -> Result<Vec<f32>, String> {
+        let prep = PreparedStreamingLayer::from_map(
+            w.clone(),
+            "linear_attention",
+            self.cfg.hidden_size,
+            self.cfg.intermediate_size,
+            self.cfg.linear_num_key_heads,
+            self.cfg.linear_num_value_heads,
+            self.cfg.linear_key_head_dim,
+            self.cfg.linear_value_head_dim,
+            self.cfg.num_attention_heads,
+            self.cfg.head_dim,
+            self.cfg.num_key_value_heads,
+        )?;
+        self.deltanet_forward_layer(&prep, hidden, layer_idx)
+    }
+
+    /// Standard attention forward with pre-structured zero-clone layer weights.
+    fn attention_forward_layer(
+        &mut self,
+        layer: &PreparedStreamingLayer,
         hidden: &[f32],
         layer_idx: usize,
         pos: usize,
     ) -> Result<Vec<f32>, String> {
         let h = self.cfg.hidden_size;
         let n_heads = self.cfg.num_attention_heads;
-        let head_dim = self.cfg.head_dim; // 256
-        let n_kv = self.cfg.num_key_value_heads; // 4
+        let head_dim = self.cfg.head_dim;
+        let n_kv = self.cfg.num_key_value_heads;
         let rms_eps = self.cfg.rms_norm_eps;
 
-        let norm_w = w
-            .get("input_layernorm.weight")
-            .ok_or("missing input_layernorm")?;
-        let normed = rms_norm(hidden, norm_w, rms_eps);
-
-        // Q = hidden @ q_proj^T — q_proj is [2h, h] (first h = Q, second h = gate)
-        let q_w = w.get("self_attn.q_proj.weight").ok_or("missing q_proj")?;
-        let k_w = w.get("self_attn.k_proj.weight").ok_or("missing k_proj")?;
-        let v_w = w.get("self_attn.v_proj.weight").ok_or("missing v_proj")?;
-        let o_w = w.get("self_attn.o_proj.weight").ok_or("missing o_proj")?;
-        let q_norm_w = w.get("self_attn.q_norm.weight");
-        let k_norm_w = w.get("self_attn.k_norm.weight");
-
+        let normed = rms_norm(hidden, &layer.input_layernorm, rms_eps);
         let hidden_t = Tensor::from_vec(normed, vec![1, h]);
-        // q_proj output: [1, 2h] — split into Q and gate
-        let q_all = hidden_t.matmul(&Tensor::from_vec(q_w.clone(), vec![2 * h, h]).transpose());
+
+        let q_t = layer.attn_q_t.as_ref().ok_or("missing attn_q_t")?;
+        let k_t = layer.attn_k_t.as_ref().ok_or("missing attn_k_t")?;
+        let v_t = layer.attn_v_t.as_ref().ok_or("missing attn_v_t")?;
+        let o_t = layer.attn_o_t.as_ref().ok_or("missing attn_o_t")?;
+
+        let q_all = hidden_t.matmul(q_t);
         let mut q = q_all.data[..h].to_vec();
         let gate = &q_all.data[h..];
-        let mut k = hidden_t.matmul(&Tensor::from_vec(k_w.clone(), vec![n_kv * head_dim, h]).transpose()).data;
-        let v = hidden_t.matmul(&Tensor::from_vec(v_w.clone(), vec![n_kv * head_dim, h]).transpose()).data;
+        let mut k = hidden_t.matmul(k_t).data;
+        let v = hidden_t.matmul(v_t).data;
 
-        // Apply Q norm (per-head RMSNorm with shared weight)
-        if let Some(qnw) = q_norm_w {
+        if let Some(ref qnw) = layer.attn_q_norm {
             for head in 0..n_heads {
                 let base = head * head_dim;
                 let mut sq = 0.0f32;
@@ -579,8 +844,7 @@ impl StreamingOrnith {
                 for d in 0..head_dim { q[base + d] = q[base + d] / r * qnw[d]; }
             }
         }
-        // Apply K norm (per-head RMSNorm with shared weight)
-        if let Some(knw) = k_norm_w {
+        if let Some(ref knw) = layer.attn_k_norm {
             for head in 0..n_kv {
                 let base = head * head_dim;
                 let mut sq = 0.0f32;
@@ -590,7 +854,6 @@ impl StreamingOrnith {
             }
         }
 
-        // RoPE (GLM-style split pairs): pair (i, i+rotary_dim/2) for i in 0..rotary_dim/2
         let rotary_dim = (self.cfg.head_dim as f32 * 0.25) as usize;
         let rope_theta = 10000000f32;
         let half_rotary = rotary_dim / 2;
@@ -621,20 +884,15 @@ impl StreamingOrnith {
             }
         }
 
-        // Append current token's K, V to cache — capped at MAX_SEQ_CACHE.
-        // Overflow returns Err (fail-loud) instead of evicting: attention
-        // requires every prior K/V, so dropping entries would corrupt output.
         let seq_len = kv_cache_append(&mut self.kv_cache, layer_idx, &k, &v)?;
         let kv_entry = self.kv_cache.get(&layer_idx).ok_or("kv cache entry missing after append")?;
         let cached_k = &kv_entry.0;
         let cached_v = &kv_entry.1;
 
-        // Attention over all cached tokens
         let mut attn_out = vec![0.0f32; h];
         for head in 0..n_heads {
             let kv_head = head / (n_heads / n_kv);
             let q_base = head * head_dim;
-            // Compute score = q @ k_cache / sqrt(d)
             let mut max_score = f32::NEG_INFINITY;
             for t in 0..seq_len {
                 let k_base = t * n_kv * head_dim + kv_head * head_dim;
@@ -645,7 +903,6 @@ impl StreamingOrnith {
                 score /= (head_dim as f32).sqrt();
                 if score > max_score { max_score = score; }
             }
-            // Compute softmax numerator for each position and sum V weighted
             let mut sum_exp = 0.0f32;
             let mut weighted_v = vec![0.0f32; head_dim];
             for t in 0..seq_len {
@@ -667,18 +924,67 @@ impl StreamingOrnith {
             }
         }
 
-        // Apply output gate: attn_out *= sigmoid(gate)
         for i in 0..h {
             attn_out[i] *= 1.0 / (1.0 + (-gate[i]).exp());
         }
 
-        // Output projection
         let out_t = Tensor::from_vec(attn_out, vec![1, h]);
-        let result = out_t.matmul(&Tensor::from_vec(o_w.clone(), vec![h, h]).transpose());
+        let result = out_t.matmul(o_t);
         Ok(result.data)
     }
 
-    /// MLP forward: SwiGLU — down(silu(gate(x)) * up(x))
+    /// Attention forward compatibility shim.
+    #[allow(dead_code)]
+    fn attention_forward(
+        &mut self,
+        w: &HashMap<String, Vec<f32>>,
+        hidden: &[f32],
+        layer_idx: usize,
+        pos: usize,
+    ) -> Result<Vec<f32>, String> {
+        let prep = PreparedStreamingLayer::from_map(
+            w.clone(),
+            "full_attention",
+            self.cfg.hidden_size,
+            self.cfg.intermediate_size,
+            self.cfg.linear_num_key_heads,
+            self.cfg.linear_num_value_heads,
+            self.cfg.linear_key_head_dim,
+            self.cfg.linear_value_head_dim,
+            self.cfg.num_attention_heads,
+            self.cfg.head_dim,
+            self.cfg.num_key_value_heads,
+        )?;
+        self.attention_forward_layer(&prep, hidden, layer_idx, pos)
+    }
+
+    /// MLP forward with pre-structured zero-clone layer weights.
+    fn mlp_forward_layer(
+        &self,
+        layer: &PreparedStreamingLayer,
+        hidden: &[f32],
+    ) -> Result<Vec<f32>, String> {
+        let h = self.cfg.hidden_size;
+        let inter = self.cfg.intermediate_size;
+
+        let hidden_t = Tensor::from_vec(hidden.to_vec(), vec![1, h]);
+        let gate_t = hidden_t.matmul(&layer.mlp_gate_t);
+        let up_t = hidden_t.matmul(&layer.mlp_up_t);
+
+        let mut hidden_inter = vec![0.0f32; inter];
+        for i in 0..inter {
+            let g = gate_t.data[i];
+            let u = up_t.data[i];
+            hidden_inter[i] = (g / (1.0 + (-g).exp())) * u;
+        }
+
+        let inter_t = Tensor::from_vec(hidden_inter, vec![1, inter]);
+        let result = inter_t.matmul(&layer.mlp_down_t);
+        Ok(result.data)
+    }
+
+    /// MLP forward compatibility shim.
+    #[allow(dead_code)]
     fn mlp_forward(
         &self,
         w: &HashMap<String, Vec<f32>>,
@@ -695,12 +1001,11 @@ impl StreamingOrnith {
         let gate_t = hidden_t.matmul(&Tensor::from_vec(gate.clone(), vec![inter, h]).transpose());
         let up_t = hidden_t.matmul(&Tensor::from_vec(up.clone(), vec![inter, h]).transpose());
 
-        // SwiGLU: silu(gate) * up
         let mut hidden_inter = vec![0.0f32; inter];
         for i in 0..inter {
             let g = gate_t.data[i];
             let u = up_t.data[i];
-            hidden_inter[i] = (g / (1.0 + (-g).exp())) * u; // silu(g) * u
+            hidden_inter[i] = (g / (1.0 + (-g).exp())) * u;
         }
 
         let inter_t = Tensor::from_vec(hidden_inter, vec![1, inter]);
@@ -742,14 +1047,22 @@ impl StreamingOrnith {
         stop_tokens: &[i32],
     ) -> Result<String, String> {
         let mut ids = self.tok.encode(prompt, 1024);
-        // Process-wide sampling config (temperature 0.0 → greedy argmax inside
-        // sample_top_p_top_k; top_k resolution: env LEAFCUTTER_TOP_K wins).
+        if ids.is_empty() {
+            return Ok(String::new());
+        }
         let (temperature, top_p) = crate::inference::sampler::default_sampling();
         let top_k = crate::inference::sampler::resolve_top_k();
-        for _ in 0..max_tokens {
+
+        // Layer-major prompt prefill: evaluates all prompt tokens layer-by-layer
+        // (loading each layer once from disk) with zero-clone tensor arithmetic.
+        let mut logits = if ids.len() > 1 {
+            self.forward_sequence(&ids)?
+        } else {
             let last = *ids.last().unwrap() as i32;
-            let pos = ids.len() - 1;
-            let logits = self.forward_one_token(last, pos)?;
+            self.forward_one_token(last, 0)?
+        };
+
+        for _ in 0..max_tokens {
             let next = crate::inference::sampler::sample_top_p_top_k(&logits, temperature, top_p, top_k) as i32;
             if stop_tokens.contains(&next) {
                 break;
@@ -758,6 +1071,9 @@ impl StreamingOrnith {
             let text = self.tok.decode(&[next]);
             print!("{text}");
             std::io::Write::flush(&mut std::io::stdout()).ok();
+
+            let pos = ids.len() - 1;
+            logits = self.forward_one_token(next, pos)?;
         }
         Ok(self.tok.decode(&ids))
     }
@@ -774,12 +1090,21 @@ impl StreamingOrnith {
         F: FnMut(&str),
     {
         let mut ids = self.tok.encode(prompt, 1024);
+        if ids.is_empty() {
+            return Ok(String::new());
+        }
         let (temperature, top_p) = crate::inference::sampler::default_sampling();
         let top_k = crate::inference::sampler::resolve_top_k();
-        for _ in 0..max_tokens {
+
+        // Layer-major prompt prefill
+        let mut logits = if ids.len() > 1 {
+            self.forward_sequence(&ids)?
+        } else {
             let last = *ids.last().unwrap() as i32;
-            let pos = ids.len() - 1;
-            let logits = self.forward_one_token(last, pos)?;
+            self.forward_one_token(last, 0)?
+        };
+
+        for _ in 0..max_tokens {
             let next = crate::inference::sampler::sample_top_p_top_k(&logits, temperature, top_p, top_k) as i32;
             if stop_tokens.contains(&next) {
                 break;
@@ -787,6 +1112,9 @@ impl StreamingOrnith {
             ids.push(next);
             let text = self.tok.decode(&[next]);
             on_token(&text);
+
+            let pos = ids.len() - 1;
+            logits = self.forward_one_token(next, pos)?;
         }
         Ok(self.tok.decode(&ids))
     }

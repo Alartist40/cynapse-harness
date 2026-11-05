@@ -199,6 +199,11 @@ impl BpeTokenizer {
         })
     }
 
+    /// Returns whether the given token ID is a special/control token.
+    pub fn is_special(&self, id: u32) -> bool {
+        self.id_special.get(id as usize).copied().unwrap_or(false)
+    }
+
     /// Encode text to token IDs.
     pub fn encode(&self, text: &str, max: usize) -> Vec<i32> {
         let p = text.as_bytes();
@@ -561,11 +566,13 @@ fn to_lower(c: u32) -> u32 {
 }
 
 #[inline]
+#[allow(non_snake_case)]
 fn is_NL(c: u32) -> bool {
     c == '\r' as u32 || c == '\n' as u32
 }
 
 #[inline]
+#[allow(non_snake_case)]
 fn is_L(_c: u32) -> bool {
     // Simplified: ASCII letters only. Full implementation would check
     // all Unicode letter categories (Lu, Ll, Lt, Lm, Lo).
@@ -573,6 +580,7 @@ fn is_L(_c: u32) -> bool {
 }
 
 #[inline]
+#[allow(non_snake_case)]
 fn is_N(c: u32) -> bool {
     // Simplified: ASCII digits only. Full implementation would check
     // all Unicode number categories.
@@ -580,6 +588,7 @@ fn is_N(c: u32) -> bool {
 }
 
 #[inline]
+#[allow(non_snake_case)]
 fn is_S(c: u32) -> bool {
     // Whitespace = space, tab, \r, \n, and other Unicode whitespace.
     c == ' ' as u32 || c == '\t' as u32 || c == '\r' as u32 || c == '\n' as u32

@@ -100,7 +100,6 @@ CREATE TABLE IF NOT EXISTS dendrite_nodes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_dendrite_updated ON dendrite_nodes(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_dendrite_topic_key ON dendrite_nodes(topic_key);
 "#;
 
 const FTS5_SCHEMA: &str = r#"

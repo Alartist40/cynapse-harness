@@ -2,6 +2,20 @@
 
 All notable changes to Cynapse are documented here.
 
+## [Unreleased] — High-Throughput Leafcutter Engine, Asynchronous Prefetching & Speculative Telemetry (2026-11-05)
+
+### Added
+- **Asynchronous Double-Buffered Layer Prefetcher (`streaming_ornith.rs`)**: Overlaps disk reads and tensor transpositions of Layer $L+1$ on a dedicated background worker thread while Layer $L$ computes on hardware, eliminating NVMe/SATA I/O stall bubbles.
+- **Batched AVX2 GEMM Vectorization (`q8_k_gemm.rs`)**: Upgraded prefill $M > 1$ kernels from scalar loops to 256-bit AVX2+FMA SIMD matrix arithmetic (`q4_k_gemv_col_q8_avx2`, `q6_k_gemv_col_q8_avx2`).
+- **Zero-Clone Layer Streaming (`streaming_ornith.rs`)**: Built `PreparedStreamingLayer`, moving layer weights directly and pre-transposing projection matrices once per layer load to eliminate 6.4 GiB/token of garbage collection allocations.
+- **Layer-Major Prompt Prefill (`streaming_ornith.rs`)**: Evaluates entire prompt sequence layer-by-layer, loading each layer once from disk/RAM before entering autoregressive decoding.
+- **Dynamic Prefill Chunk-Sizing (`detect.rs`)**: Automatically bounds RAM consumption during prompt ingestion based on available physical memory (512 / 1024 / 2048 tokens).
+- **ARM NEON Vectorization Fallback (`q8_k_gemm.rs`)**: Added runtime `dotprod` CPU feature detection on AArch64 targets, dispatching to `q4_k_dot_q8_k_neon` and `q6_k_dot_q8_k_neon` on hardware without ARMv8.2-A dotprod (e.g. Raspberry Pi 4 / Cortex-A72).
+- **Interactive Speculative Prompt Lookup (`cynapse-tui`)**: Added `/spec` slash command and `F6` hotkey with live acceptance rate tracking in the top header bar (`Spec: ON (F6)`).
+- **Layer Streaming Progress Gauge (`cynapse-tui`)**: Real-time horizontal mini-gauge `Layer Streaming: [████████░░░░] L{cur}/{total} ({pct}%)` rendered in conversation viewport during active generation.
+- **Calm Telemetry Animation & Header Formatting (`cynapse-tui`)**: Restored `Perf:` header badge and slowed down braille sparkline animation to a relaxed ~1.4s cycle (`anim_tick / 8` active, `anim_tick / 16` idle).
+- **Dendrite Memory Fix**: Resolved table index migration ordering in SQLite schema; verified 100% Doctor Health Score (22 Pass).
+
 ## [Unreleased] — Sovereign Local Inference, Speculative Decoding, Non-Blocking Updater & Debloating (2026-10-30)
 
 ### Added

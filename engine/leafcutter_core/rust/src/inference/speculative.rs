@@ -143,6 +143,28 @@ impl SpeculativeDecoder {
     }
 }
 
+/// Finds speculative draft tokens using prompt n-gram matching (Prompt Lookup Decoding).
+/// Matches the trailing `ngram_size` tokens against earlier occurrences in `context`
+/// and drafts up to `max_draft` subsequent tokens.
+pub fn find_prompt_lookup_draft(context: &[usize], ngram_size: usize, max_draft: usize) -> Vec<usize> {
+    if context.len() < ngram_size + 1 || ngram_size == 0 || max_draft == 0 {
+        return Vec::new();
+    }
+    let query = &context[context.len() - ngram_size..];
+    let search_end = context.len() - ngram_size;
+    for i in (0..search_end).rev() {
+        if &context[i..i + ngram_size] == query {
+            let draft_start = i + ngram_size;
+            let draft_len = (search_end - draft_start).min(max_draft);
+            if draft_len > 0 {
+                return context[draft_start..draft_start + draft_len].to_vec();
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Greedy sample argmax from logits
 fn greedy_sample(logits: &[f32]) -> usize {
     logits.iter()
         .enumerate()
@@ -185,5 +207,26 @@ mod tests {
 
         let drafts = head.draft(&hidden, &lm_head);
         assert_eq!(drafts.len(), 3);
+    }
+
+    #[test]
+    fn test_find_prompt_lookup_draft_success() {
+        let context = vec![10, 20, 30, 40, 50, 60, 10, 20, 30];
+        let drafts = find_prompt_lookup_draft(&context, 3, 4);
+        assert_eq!(drafts, vec![40, 50, 60]);
+    }
+
+    #[test]
+    fn test_find_prompt_lookup_draft_no_match() {
+        let context = vec![10, 20, 30, 40, 50, 60, 70, 80];
+        let drafts = find_prompt_lookup_draft(&context, 3, 3);
+        assert!(drafts.is_empty());
+    }
+
+    #[test]
+    fn test_find_prompt_lookup_draft_short_context() {
+        let context = vec![10, 20];
+        let drafts = find_prompt_lookup_draft(&context, 3, 3);
+        assert!(drafts.is_empty());
     }
 }

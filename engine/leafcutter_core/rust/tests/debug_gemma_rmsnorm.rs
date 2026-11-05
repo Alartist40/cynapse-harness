@@ -18,7 +18,7 @@ fn debug_rmsnorm_input() {
     let prompt = std::env::var("LEAFCUTTER_PROMPT").unwrap_or_else(|_| "Hello".to_string());
 
     eprintln!("Loading model: {model_path}");
-    let mut engine = Engine::load(&model_path).expect("Failed to load model");
+    let engine = Engine::load(&model_path).expect("Failed to load model");
     eprintln!("Loaded. hidden_size={}, vocab={}", engine.config.hidden_size, engine.config.vocab_size);
 
     // Encode via the engine's tokenizer (try FFI first, then native rust).
@@ -44,7 +44,7 @@ fn debug_rmsnorm_input() {
     eprintln!("emb(scaled)  L2={l2_pre:.3}  min={min_pre:.4}  max={max_pre:.4}");
 
     // Load layer 0 weights — pull out attn_norm.weight.
-    let mut layer = engine.model.load_layer(0).expect("layer 0");
+    let layer = engine.model.load_layer(0).expect("layer 0");
     let w = layer
         .get("input_layernorm.weight")
         .or_else(|| layer.get("attn_norm.weight"))

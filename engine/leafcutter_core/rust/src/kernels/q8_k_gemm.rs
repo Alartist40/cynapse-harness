@@ -329,19 +329,26 @@ fn run_q4_k_q8_gemm(a: &[f32], b: &Q4KMatrix, c: &mut [f32], m: usize, k: usize,
         use crate::kernels::q8_k::build_q4_aux8;
         use crate::kernels::q8_k::q4_block_dot_sdot;
         use rayon::prelude::*;
-        let nthreads = rayon::current_num_threads().max(1);
-        let chunkp = (n / (nthreads * 2)).max(1);
+        let has_dotprod = std::arch::is_aarch64_feature_detected!("dotprod");
         let mut col_results = vec![0.0f32; n * m];
         col_results.par_chunks_mut(m).enumerate().for_each(|(j, col)| {
             let row_base = j * bpr;
-            let mut aux = [0u8; Q4QK];
-            unsafe {
-                for blk in 0..bpr {
-                    let block = &b.blocks[row_base + blk];
-                    build_q4_aux8(block, &mut aux);
-                    for i in 0..m {
-                        col[i] += q4_block_dot_sdot(block, &aux, &a_q[i * abpr + blk]);
+            let w = &b.blocks[row_base..row_base + bpr];
+            if has_dotprod {
+                let mut aux = [0u8; Q4QK];
+                unsafe {
+                    for blk in 0..bpr {
+                        let block = &b.blocks[row_base + blk];
+                        build_q4_aux8(block, &mut aux);
+                        for i in 0..m {
+                            col[i] += q4_block_dot_sdot(block, &aux, &a_q[i * abpr + blk]);
+                        }
                     }
+                }
+            } else {
+                for i in 0..m {
+                    let arow = &a_q[i * abpr..(i + 1) * abpr];
+                    col[i] += unsafe { crate::kernels::q8_k::q4_k_dot_q8_k_neon(w, arow) };
                 }
             }
         });
@@ -355,14 +362,22 @@ fn run_q4_k_q8_gemm(a: &[f32], b: &Q4KMatrix, c: &mut [f32], m: usize, k: usize,
     #[cfg(not(target_arch = "aarch64"))]
     {
         use rayon::prelude::*;
-        let nthreads = rayon::current_num_threads().max(1);
-        let _chunkp = (n / (nthreads * 2)).max(1);
         let mut col_results = vec![0.0f32; n * m];
+        #[cfg(target_arch = "x86_64")]
+        let has_avx2 = std::is_x86_feature_detected!("avx2");
+        #[cfg(not(target_arch = "x86_64"))]
+        let has_avx2 = false;
+
         col_results.par_chunks_mut(m).enumerate().for_each(|(j, col)| {
             let row_base = j * bpr;
             let w = &b.blocks[row_base..row_base + bpr];
             for i in 0..m {
                 let arow = &a_q[i * abpr..(i + 1) * abpr];
+                #[cfg(target_arch = "x86_64")]
+                if has_avx2 {
+                    col[i] += unsafe { q4_k_gemv_col_q8_avx2(w, arow) };
+                    continue;
+                }
                 col[i] += q4_k_dot_q8_k_scalar(w, arow);
             }
         });
@@ -401,19 +416,26 @@ fn run_q6_k_q8_gemm(a: &[f32], b: &Q6KMatrix, c: &mut [f32], m: usize, k: usize,
         use crate::kernels::q8_k::build_q6_aux8;
         use crate::kernels::q8_k::q6_block_dot_sdot;
         use rayon::prelude::*;
-        let nthreads = rayon::current_num_threads().max(1);
-        let chunkp = (n / (nthreads * 2)).max(1);
+        let has_dotprod = std::arch::is_aarch64_feature_detected!("dotprod");
         let mut col_results = vec![0.0f32; n * m];
         col_results.par_chunks_mut(m).enumerate().for_each(|(j, col)| {
             let row_base = j * bpr;
-            let mut aux = [0i8; Q6QK];
-            unsafe {
-                for blk in 0..bpr {
-                    let block = &b.blocks[row_base + blk];
-                    build_q6_aux8(block, &mut aux);
-                    for i in 0..m {
-                        col[i] += q6_block_dot_sdot(block, &aux, &a_q[i * abpr + blk]);
+            let w = &b.blocks[row_base..row_base + bpr];
+            if has_dotprod {
+                let mut aux = [0i8; Q6QK];
+                unsafe {
+                    for blk in 0..bpr {
+                        let block = &b.blocks[row_base + blk];
+                        build_q6_aux8(block, &mut aux);
+                        for i in 0..m {
+                            col[i] += q6_block_dot_sdot(block, &aux, &a_q[i * abpr + blk]);
+                        }
                     }
+                }
+            } else {
+                for i in 0..m {
+                    let arow = &a_q[i * abpr..(i + 1) * abpr];
+                    col[i] += unsafe { crate::kernels::q8_k::q6_k_dot_q8_k_neon(w, arow) };
                 }
             }
         });
@@ -427,14 +449,22 @@ fn run_q6_k_q8_gemm(a: &[f32], b: &Q6KMatrix, c: &mut [f32], m: usize, k: usize,
     #[cfg(not(target_arch = "aarch64"))]
     {
         use rayon::prelude::*;
-        let nthreads = rayon::current_num_threads().max(1);
-        let _chunkp = (n / (nthreads * 2)).max(1);
         let mut col_results = vec![0.0f32; n * m];
+        #[cfg(target_arch = "x86_64")]
+        let has_avx2 = std::is_x86_feature_detected!("avx2");
+        #[cfg(not(target_arch = "x86_64"))]
+        let has_avx2 = false;
+
         col_results.par_chunks_mut(m).enumerate().for_each(|(j, col)| {
             let row_base = j * bpr;
             let w = &b.blocks[row_base..row_base + bpr];
             for i in 0..m {
                 let arow = &a_q[i * abpr..(i + 1) * abpr];
+                #[cfg(target_arch = "x86_64")]
+                if has_avx2 {
+                    col[i] += unsafe { q6_k_gemv_col_q8_avx2(w, arow) };
+                    continue;
+                }
                 col[i] += q6_k_dot_q8_k_scalar(w, arow);
             }
         });
@@ -539,7 +569,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_arch = "aarch64")]
     #[test]
     fn test_q4_k_q8_gemm_m4_matches_dequant() {
         let k = 1024;
@@ -566,7 +595,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_arch = "aarch64")]
     #[test]
     fn test_q6_k_q8_gemm_m4_matches_dequant() {
         let k = 1024;

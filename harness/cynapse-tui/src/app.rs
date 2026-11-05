@@ -165,6 +165,8 @@ pub enum UpdateEvent {
 pub enum StreamEvent {
     Token { ttype: TokenType, text: String },
     Done { tok_per_sec: f64, elapsed_sec: f64 },
+    LayerProgress { current: usize, total: usize },
+    SpeculativeDraft { accepted: usize, total: usize },
     Error(String),
 }
 
@@ -191,6 +193,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/persona", description: "Manage agent personality markdown files (IDENTITY, SOUL, USER)" },
     SlashCommand { name: "/bots", description: "List and inspect configured subagent bot profiles" },
     SlashCommand { name: "/thinking", description: "Toggle collapsible model thinking/reasoning blocks" },
+    SlashCommand { name: "/spec", description: "Toggle n-gram speculative prompt lookup decoding acceleration (F6)" },
     SlashCommand { name: "/unload", description: "Unload active LLM model from RAM immediately to free memory" },
     SlashCommand { name: "/backup", description: "Create or restore AES-256-GCM encrypted backup of memory database" },
     SlashCommand { name: "/session", description: "Open saved sessions manager" },
@@ -361,6 +364,12 @@ pub struct TuiApp {
     pub selected_theme_idx: usize,
     pub session_rename_buf: String,
     pub available_update: Option<String>,
+
+    // Speculative Prompt Lookup & Streaming Telemetry
+    pub speculative_decoding_enabled: bool,
+    pub speculative_accepted_drafts: usize,
+    pub speculative_total_drafts: usize,
+    pub current_streaming_layer: Option<(usize, usize)>,
 }
 
 impl TuiApp {
@@ -487,6 +496,10 @@ impl TuiApp {
             available_update: None,
             update_state: None,
             update_rx: None,
+            speculative_decoding_enabled: true,
+            speculative_accepted_drafts: 0,
+            speculative_total_drafts: 0,
+            current_streaming_layer: None,
         }
     }
 
@@ -1584,7 +1597,7 @@ impl TuiApp {
                                         if self.palette_selected_idx > 0 {
                                             self.palette_selected_idx -= 1;
                                         } else {
-                                            self.palette_selected_idx = 12;
+                                            self.palette_selected_idx = 13;
                                         }
                                     }
                                     _ => {}
@@ -1617,7 +1630,7 @@ impl TuiApp {
                                         self.selected_bot_idx = self.selected_bot_idx.saturating_add(1);
                                     }
                                     ActiveModal::CommandPalette => {
-                                        self.palette_selected_idx = (self.palette_selected_idx + 1) % 13;
+                                        self.palette_selected_idx = (self.palette_selected_idx + 1) % 14;
                                     }
                                     _ => {}
                                 },
@@ -1801,11 +1814,19 @@ impl TuiApp {
                                     ActiveModal::CommandPalette => {
                                         const PALETTE_COMMANDS: &[&str] = &[
                                             "/help", "/dendrite", "/theme", "/model", "/session", "/doctor",
-                                            "/rewind", "/fork", "/bots", "/persona", "/undo", "/clear", "/exit"
+                                            "/spec", "/rewind", "/fork", "/bots", "/persona", "/undo", "/clear", "/exit"
                                         ];
                                         let sel = PALETTE_COMMANDS[self.palette_selected_idx.min(PALETTE_COMMANDS.len() - 1)];
                                         self.modal = ActiveModal::None;
                                         match sel {
+                                            "/spec" => {
+                                                self.speculative_decoding_enabled = !self.speculative_decoding_enabled;
+                                                self.messages.push(ChatMessage {
+                                                    role: "system".into(),
+                                                    content: format!("Speculative Prompt Lookup Decoding is now: {}", if self.speculative_decoding_enabled { "ENABLED (Accelerated n-gram drafting)" } else { "DISABLED" }),
+                                                    thinking: None,
+                                                });
+                                            }
                                             "/help" => self.modal = ActiveModal::Help,
                                             "/dendrite" => self.modal = ActiveModal::MemoryGraph,
                                             "/theme" => self.modal = ActiveModal::ThemePicker,
@@ -2028,6 +2049,26 @@ impl TuiApp {
                             KeyCode::Tab => {
                                 // Typing '/' opens command palette; Tab does not hijack chat focus
                             }
+                            KeyCode::F(6) => {
+                                self.speculative_decoding_enabled = !self.speculative_decoding_enabled;
+                                let status_str = if self.speculative_decoding_enabled {
+                                    "ENABLED (Accelerated n-gram drafting)"
+                                } else {
+                                    "DISABLED"
+                                };
+                                let acc_str = if self.speculative_total_drafts > 0 {
+                                    let pct = (self.speculative_accepted_drafts as f64 / self.speculative_total_drafts as f64) * 100.0;
+                                    format!(" │ Acceptance: {:.1}% ({}/{})", pct, self.speculative_accepted_drafts, self.speculative_total_drafts)
+                                } else {
+                                    String::new()
+                                };
+                                self.messages.push(ChatMessage {
+                                    role: "system".into(),
+                                    content: format!("Speculative Prompt Lookup Decoding: {}{}", status_str, acc_str),
+                                    thinking: None,
+                                });
+                                continue;
+                            }
                             KeyCode::Esc => {
                                 if !self.input.is_empty() {
                                     self.input.clear();
@@ -2168,6 +2209,27 @@ impl TuiApp {
                                     self.messages.push(ChatMessage {
                                         role: "system".into(),
                                         content: format!("Model reasoning/thinking blocks are now: {}", if self.show_thinking { "Expanded (Visible)" } else { "Collapsed (Hidden)" }),
+                                        thinking: None,
+                                    });
+                                    continue;
+                                }
+
+                                if trimmed == "/spec" {
+                                    self.speculative_decoding_enabled = !self.speculative_decoding_enabled;
+                                    let status_str = if self.speculative_decoding_enabled {
+                                        "ENABLED (Accelerated n-gram drafting)"
+                                    } else {
+                                        "DISABLED"
+                                    };
+                                    let acc_str = if self.speculative_total_drafts > 0 {
+                                        let pct = (self.speculative_accepted_drafts as f64 / self.speculative_total_drafts as f64) * 100.0;
+                                        format!(" │ Acceptance: {:.1}% ({}/{})", pct, self.speculative_accepted_drafts, self.speculative_total_drafts)
+                                    } else {
+                                        String::new()
+                                    };
+                                    self.messages.push(ChatMessage {
+                                        role: "system".into(),
+                                        content: format!("Speculative Prompt Lookup Decoding is now: {}{}", status_str, acc_str),
                                         thinking: None,
                                     });
                                     continue;
@@ -2935,7 +2997,15 @@ impl TuiApp {
                         TokenType::Response => self.current_response_buf.push_str(&text),
                     }
                 },
+                StreamEvent::LayerProgress { current, total } => {
+                    self.current_streaming_layer = Some((current, total));
+                },
+                StreamEvent::SpeculativeDraft { accepted, total } => {
+                    self.speculative_accepted_drafts += accepted;
+                    self.speculative_total_drafts += total;
+                },
                 StreamEvent::Done { tok_per_sec, elapsed_sec } => {
+                    self.current_streaming_layer = None;
                     self.last_tok_per_sec = tok_per_sec;
                     self.last_latency_sec = elapsed_sec;
                     if tok_per_sec > 0.0 {
@@ -3241,6 +3311,7 @@ impl TuiApp {
                     }
                 }
                 StreamEvent::Error(err) => {
+                    self.current_streaming_layer = None;
                     self.turn_verified = false;
                     self.messages.push(ChatMessage {
                         role: "error".into(),
@@ -3274,10 +3345,12 @@ impl TuiApp {
         ];
 
         if self.is_generating || self.last_tok_per_sec > 0.0 {
-            let idx = self.anim_tick % WAVES_ACTIVE.len();
+            // Calm, rhythmic wave: 8 ticks per frame (~240ms/frame, ~1.4s cycle)
+            let idx = (self.anim_tick / 8) % WAVES_ACTIVE.len();
             format!("[{}]", WAVES_ACTIVE[idx])
         } else {
-            let idx = (self.anim_tick / 2) % WAVES_IDLE.len();
+            // Very gentle idle breathing wave: 16 ticks per frame (~480ms/frame)
+            let idx = (self.anim_tick / 16) % WAVES_IDLE.len();
             format!("[{}]", WAVES_IDLE[idx])
         }
     }
@@ -3595,19 +3668,38 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     if self.is_generating {
                         let wave = self.render_sparkline();
                         if let Some(ttft) = self.last_ttft_ms {
-                            format!("[:::···] {:.1} t/s (TTFT: {}ms) {}", self.last_tok_per_sec, ttft, wave)
+                            format!("Perf: {:.1} t/s (TTFT: {}ms) {}", self.last_tok_per_sec, ttft, wave)
                         } else {
-                            format!("[:::···] {:.1} t/s {}", self.last_tok_per_sec, wave)
+                            format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, wave)
                         }
                     } else if self.last_tok_per_sec > 0.0 {
-                        format!("[·····] {:.1} t/s {}", self.last_tok_per_sec, self.render_sparkline())
+                        format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, self.render_sparkline())
                     } else {
-                        format!("[·····] idle {}", self.render_sparkline())
+                        format!("Perf: idle {}", self.render_sparkline())
                     },
                     if self.is_generating {
                         Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::Rgb(180, 160, 220))
+                    },
+                ),
+                Span::styled("  │  ", t.dim_text()),
+                Span::styled("Spec: ", t.dim_text()),
+                Span::styled(
+                    if self.speculative_decoding_enabled {
+                        if self.speculative_total_drafts > 0 {
+                            let pct = ((self.speculative_accepted_drafts as f64 / self.speculative_total_drafts as f64) * 100.0) as u32;
+                            format!("ON ({}% draft)", pct)
+                        } else {
+                            "ON (F6)".to_string()
+                        }
+                    } else {
+                        "OFF (F6)".to_string()
+                    },
+                    if self.speculative_decoding_enabled {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
                     },
                 ),
             ]
@@ -3912,7 +4004,13 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
             self.scroll_offset.min(max_scroll)
         };
 
-        let scroll_title = if max_scroll > 0 {
+        let scroll_title = if let Some((cur, total)) = self.current_streaming_layer {
+            let pct = if total > 0 { (cur * 100) / total } else { 0 };
+            let filled = ((pct * 12) / 100).min(12);
+            let empty = 12 - filled;
+            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+            format!(" Layer Streaming: [{}] L{}/{} ({}%) ", bar, cur, total, pct)
+        } else if max_scroll > 0 {
             let pct = (effective_scroll as f32 / max_scroll as f32 * 100.0).min(100.0) as u32;
             format!(" Conversation Viewport [▲ Scroll {}% ▼] (Up/Down/PgUp/PgDn) ", pct)
         } else {
@@ -4251,6 +4349,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     ("/model", "Switch or pull LLM models"),
                     ("/session", "Saved conversation sessions"),
                     ("/doctor", "System self-healing diagnostics"),
+                    ("/spec", "Toggle n-gram speculative prompt lookup"),
                     ("/rewind", "Rewind last conversational turn"),
                     ("/fork", "Branch session into new fork"),
                     ("/bots", "Bot profile catalog"),

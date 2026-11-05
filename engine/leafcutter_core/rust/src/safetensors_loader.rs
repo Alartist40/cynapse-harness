@@ -111,6 +111,11 @@ pub struct Shards {
 }
 
 impl Shards {
+    /// Return the list of loaded shard file paths.
+    pub fn paths(&self) -> &[String] {
+        &self.paths
+    }
+
     /// Load all .safetensors files from a directory.
     /// If the directory has a model.safetensors.index.json, uses it to
     /// determine which shards contain which tensors.  Otherwise looks

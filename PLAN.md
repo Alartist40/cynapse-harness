@@ -285,13 +285,37 @@ Working tree already contains, in `cynapse.toml` + `engine/cynapse-engine/src/li
   - Compiled optimized 9.3 MB standalone production binary `./target/release/cynapse`.
   - Verified 100% Doctor Health Score (22 Pass | 0 Warning | 0 Failed) and all 78 tests passing.
 
-- **Stage 35: 5 Core Architectural Vectors [IN PROGRESS]**
+- **Stage 35: 5 Core Architectural Vectors [DONE — G38 PASSED 2026-11-05]**
   `OWNS: memory/cynapse-memory/src/store.rs, memory/cynapse-memory/src/context.rs, harness/cynapse-core/src/offline_agent.rs, harness/cynapse-tui/src/app.rs, ~/.cynapse/synapses/soup/`
   - Vector 1: Soup Synapse Tool Extension (Fine-Tuning & Dataset Doctor) [DONE]
-  - Vector 2: Speculative Memory Prefetcher in `cynapse-memory/context.rs` [PENDING]
-  - Vector 3: Compact ASCII Breadcrumb & Paraclea Widget in `cynapse-tui` [PENDING]
-  - Vector 4: Epistemic Confidence Decay & Dead-Memory GC in `cynapse-memory/store.rs` [PENDING]
-  - Vector 5: GBNF Tool Critic Pipeline for Tiny Models in `cynapse-core/offline_agent.rs` [PENDING]
+  - Vector 2: Speculative Memory Prefetcher in `cynapse-memory/context.rs` [DONE]
+  - Vector 3: Compact ASCII Breadcrumb & Paraclea Widget in `cynapse-tui` [DONE]
+  - Vector 4: Epistemic Confidence Decay & Dead-Memory GC in `cynapse-memory/store.rs` [DONE]
+  - Vector 5: GBNF Tool Critic Pipeline for Tiny Models in `cynapse-core/offline_agent.rs` [DONE]
+
+- **Stage 36: Sovereign High-Throughput Leafcutter Engine & Tier 3 Chunked Streaming [DONE — G39 PASSED 2026-11-05]**
+  `OWNS: engine/leafcutter_core/rust/src/kernels/q8_k_gemm.rs, engine/leafcutter_core/rust/src/streaming_ornith.rs, engine/leafcutter_core/rust/src/inference/speculative.rs`
+  - Phase 1: Native Batched AVX2 GEMM in `q8_k_gemm.rs` replacing scalar fallback `q4_k_dot_q8_k_scalar` / `q6_k_dot_q8_k_scalar` for prompt prefill ($M > 1$) on x86_64.
+  - Phase 2: Zero-clone layer streaming in `streaming_ornith.rs` with `PreparedStreamingLayer`: pre-transposed weight matrices loaded once per layer, eliminating 6.4 GB/token of heap allocations.
+  - Phase 3: Layer-major prompt prefill in `streaming_ornith.rs`: evaluates entire prompt sequence layer-by-layer (loading each layer once from disk) before autoregressive decoding.
+  - Phase 4: Prompt Lookup Decoding in `speculative.rs`: added `find_prompt_lookup_draft` for n-gram speculative drafting with zero model-load overhead.
+  - Phase 5: Verified 220 `leafcutter` unit tests and 243+ workspace unit tests passing with zero errors.
+
+- **Stage 37: End-of-Day Comprehensive Codebase Inspection & Hardening [DONE 2026-11-05]**
+  `OWNS: memory/cynapse-memory/src/store.rs, target/, engine/leafcutter_core/`
+  - Dendrite SQLite index migration ordering fix (achieved 100% Doctor Health Score: 22 Pass | 0 Warning | 0 Failed).
+  - Cleaned all compiler warnings, dead code, and unused imports across all crates (0 warnings on full workspace check).
+  - Purged 16.6 GiB obsolete build cache and compiled lean release binary `./target/release/cynapse` (9.5 MB standalone).
+  - All 243+ workspace unit tests passing with zero errors.
+
+- **Stage 38: Asynchronous Tier 3 Prefetching & Interactive Speculative Decoding [DONE — G40 PASSED 2026-11-05]**
+  `OWNS: engine/leafcutter_core/rust/src/streaming_ornith.rs, engine/leafcutter_core/rust/src/detect.rs, engine/leafcutter_core/rust/src/kernels/q8_k_gemm.rs, harness/cynapse-tui/src/app.rs`
+  - Asynchronous Double-Buffered Layer Prefetcher (`streaming_ornith.rs`): spawned background worker thread loads and pre-transposes Layer $L+1$ from NVMe while Layer $L$ computes on CPU/GPU, eliminating disk I/O latency bubbles.
+  - Dynamic RAM-Aware Prefill Chunk Sizer (`detect.rs`): scales chunk sizes dynamically (512 / 1024 / 2048 tokens) based on detected available system memory.
+  - ARM NEON Fallback GEMM Vectorization (`q8_k_gemm.rs`): dispatches to `q4_k_dot_q8_k_neon` and `q6_k_dot_q8_k_neon` on AArch64 targets lacking ARMv8.2-A dotprod, avoiding illegal instruction traps while maintaining SIMD acceleration.
+  - Interactive Speculative Toggle (`cynapse-tui/app.rs`): added `/spec` slash command and `F6` hotkey with top header status indicator (`Spec: ON (F6)`) and real-time draft acceptance tracking.
+  - Layer Streaming Mini-Gauge (`cynapse-tui/app.rs`): real-time horizontal progress indicator `Layer Streaming: [████████░░░░] L12/40 (30%)` in message scroll bar.
+  - Verified 244+ workspace tests passing and 100% Doctor Health Score (22 Pass).
 
 ## Out of scope (deferred, recorded not dropped)
 - P2 table: app.rs 230 KB split, ripgrep fast path, eval_count tok/s parsing, per-provider payload generation beyond sampling(), Ollama llama.cpp-only field removal.

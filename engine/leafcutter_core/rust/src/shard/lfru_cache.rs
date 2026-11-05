@@ -87,7 +87,7 @@ impl LfruCache {
     /// Pick the candidate (non-resident idx) most worth promoting into a slot.
     /// Combined with `pick_eviction`, lets us check the 25%+4 hysteresis
     /// before evicting cold for a hot candidate.
-    fn pick_candidate(&self) -> Option<usize> {
+    pub fn pick_candidate(&self) -> Option<usize> {
         // Iterate tracked layers (could be residents or not). Non-residents
         // are higher-priority — those are newly-seen layers whose heat is
         // only acquired via misses. If we have a miss wave we want them.

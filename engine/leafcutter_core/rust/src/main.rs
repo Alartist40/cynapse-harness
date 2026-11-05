@@ -39,7 +39,8 @@ use leafcutter::llama_ffi::{backend_init, backend_free, LlamaModel, LlamaContext
 use leafcutter::api::FfiEngine;
 
 use leafcutter::model::gguf::GGUFile;
-use leafcutter::profiles::{render_chat_prompt, render_prompt, resolve_profile};
+use leafcutter::profiles::{render_chat_prompt, resolve_profile};
+#[cfg(feature = "llama-ffi")]
 use leafcutter::tokenizer::chat_template::apply_chat_template_from_gguf;
 
 #[derive(Parser)]
@@ -266,7 +267,7 @@ async fn main() {
     // Cap rayon's global pool BEFORE any par_iter() runs (defaults to ALL
     // logical CPUs → pegs every core and spins up laptop fans during a
     // single inference workload). Default = physical cores − 1.
-    leafcutter::init::configure_thread_pool(None);
+    let _ = leafcutter::init::configure_thread_pool(None);
     let cli = Cli::parse();
 
     // Cynapse synapse metadata query — must work without loading a model
@@ -316,12 +317,14 @@ async fn main() {
         Some(Commands::Server { model, port, host, engine, benchmark }) => {
             cmd_serve(&model, port, &host, &engine, benchmark).await;
         }
+        #[allow(unused_variables)]
         Some(Commands::Generate { model, prompt, system, raw, tf_check, max_tokens, temperature, threads, ctx_size, gpu_layers }) => {
             #[cfg(feature = "llama-ffi")]
             cmd_generate(&model, &prompt, &system, raw, max_tokens, temperature, threads, ctx_size, gpu_layers, tf_check);
             #[cfg(not(feature = "llama-ffi"))]
             cmd_generate_native(&model, &prompt, &system, raw, max_tokens, temperature, tf_check);
         }
+        #[allow(unused_variables)]
         Some(Commands::Chat { model, system, max_tokens, temperature, threads, ctx_size, gpu_layers }) => {
             #[cfg(feature = "llama-ffi")]
             cmd_chat(&model, &system, max_tokens, temperature, threads, ctx_size, gpu_layers);
@@ -412,7 +415,7 @@ fn scan_models(dirs: &[PathBuf]) -> Vec<(PathBuf, u64)> {
 /// engine is being debugged.  CPU-only by default; users with a
 /// CUDA build of torch get GPU acceleration automatically (set
 /// CUDA_VISIBLE_DEVICES if needed).
-fn cmd_run_safetensor(model_arg: &str, mut temp: f32, _top_p: f32, mut max_tokens: usize) {
+fn cmd_run_safetensor(model_arg: &str, mut temp: f32, _top_p: f32, max_tokens: usize) {
     use leafcutter::model::gguf::GGUFile;
     use leafcutter::profiles::{render_chat_prompt, resolve_profile};
 
@@ -1757,6 +1760,7 @@ fn cmd_run_ollama(
     }
 }
 
+#[allow(unused_variables)]
 async fn cmd_serve(model_path: &str, port: u16, host: &str, engine_type: &str, benchmark: bool) {
     // If no model specified, try to auto-detect the largest one
     let model_path = if model_path.is_empty() {
@@ -2309,7 +2313,7 @@ fn cmd_generate_native(
 // Shared helpers
 // ═════════════════════════════════════════════════════════════════════════════
 
-fn cmd_list_models(dir: &PathBuf) {
+fn cmd_list_models(dir: &std::path::Path) {
     let dir_str = dir.to_string_lossy().to_string();
     let dir = shellexpand::tilde(&dir_str);
     let dir = PathBuf::from(dir.as_ref());

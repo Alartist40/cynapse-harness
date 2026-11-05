@@ -200,3 +200,13 @@
   EXPECT: G38 PASS
   EVIDENCE: All unit tests pass across all crates. Epistemic dead-memory garbage collection verified; speculative memory prefetcher active; Paraclea status HUD integrated; tiny-model tool critic repair filters active; Soup Synapse extension registered.
 
+- [x] G39: Sovereign Leafcutter Engine: AVX2 Batched GEMM, Zero-Clone Streaming & Prompt Lookup Drafting
+  CHECK: cargo test -p leafcutter && cargo test --workspace && echo "G39 PASS"
+  EXPECT: G39 PASS
+  EVIDENCE: 220 leafcutter tests passed (0 failed), 243+ workspace tests passed. Vectorized AVX2 block GEMM replaced scalar fallback in `q8_k_gemm.rs` for M > 1; `streaming_ornith.rs` upgraded to `PreparedStreamingLayer` with zero-clone pre-transposed layer weights and layer-major prompt prefill; `speculative.rs` enhanced with Prompt Lookup Decoding (`find_prompt_lookup_draft`).
+
+- [x] G40: Double-Buffered Asynchronous Prefetcher, Dynamic Chunk Sizing, ARM NEON Vectorization & TUI Spec Controls
+  CHECK: cargo test --workspace && ./target/release/cynapse doctor && echo "G40 PASS"
+  EXPECT: G40 PASS
+  EVIDENCE: 244 workspace unit tests passed (0 failed). Double-buffered asynchronous layer prefetcher overlaps disk reads with compute in `streaming_ornith.rs`; dynamic chunk-sizing scales prefill memory in `detect.rs`; ARM NEON dotprod fallback vectorization active in `q8_k_gemm.rs`; TUI `/spec` toggle & F6 keybinding with live draft tracking and visual layer streaming gauge active; slowed rhythmic braille wave animation in header bar; 100% Doctor Health Score (22 Pass).
+

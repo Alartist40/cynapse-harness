@@ -94,13 +94,14 @@ pub struct Engine {
     /// DeltaNet state cache: persistent matrix state for DeltaNet layers.
     pub deltanet_cache: DeltaNetStateCache,
     /// Path to the GGUF model file — used to lazily (re)build the tokenizer.
-    gguf_path: String,
+    pub gguf_path: String,
     /// Cached tokenizer; rebuilt only when None.  Avoids re-extracting the
     /// vocab from the mmap on every `generate_text` call (which used to
     /// happen per-token, ~50 KB of work per generation step).
     cached_tokenizer: std::sync::Mutex<Option<GgufTokenizer>>,
     /// Cached lm_head projection buffer size; avoids per-token resize on
     /// thread-local buffers in `lm_head_projection`.
+    #[allow(dead_code)]
     cached_lm_head_size: std::sync::atomic::AtomicUsize,
     /// Whether the mmap pages have been released after the layer cache warmed.
     /// All 32 layer weight sets are then served from the RAM layer cache, so

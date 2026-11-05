@@ -62,6 +62,7 @@ Type `/` in the prompt bar to trigger the floating command menu:
 | `/memory` | Launch 3D Orbital Galaxy Memory Atlas visualizer |
 | `/drawer` | Open interactive Dendrite Memory drawer inspector |
 | `/synapse` | Manage modular Synapse tool extensions (`soup`, `finetune`, etc.) |
+| `/spec` | Toggle n-gram speculative prompt lookup decoding acceleration (`F6`) |
 | `/thinking` | Toggle collapsible model reasoning/thinking stream blocks |
 | `/theme` | Cycle color themes (Dark Slate, Neon Cyber, Amber CRT, Emerald Matrix) |
 | `/update` | Check, pull, and compile latest Cynapse updates with non-blocking live modal |
@@ -78,6 +79,7 @@ Type `/` in the prompt bar to trigger the floating command menu:
 | `Up` / `Down` | Scroll conversation viewport line-by-line |
 | `Ctrl+Backspace` / `Ctrl+W` | Delete word backward in prompt input |
 | `Ctrl+T` | Toggle model thinking/reasoning blocks |
+| `F6` | Toggle n-gram speculative prompt lookup acceleration |
 | `Ctrl+A` / `Ctrl+E` | Move input cursor to start / end of line |
 | `Ctrl+U` | Clear input line |
 | `Spacebar` / `s` (in `/memory`) | Toggle 3D Galaxy auto-rotation |
