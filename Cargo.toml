@@ -9,7 +9,7 @@ license = "MIT"
 [workspace]
 members = [
     ".",
-    "crates/mazzaroth",
+    "crates/dendrite-3d",
     "harness/cynapse-core",
     "harness/cynapse-tui",
     "engine/cynapse-engine",

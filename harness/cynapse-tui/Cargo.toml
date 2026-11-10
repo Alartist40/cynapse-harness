@@ -17,7 +17,7 @@ regex = "1"
 cynapse-core = { path = "../cynapse-core" }
 cynapse-engine = { path = "../../engine/cynapse-engine" }
 cynapse-memory = { path = "../../memory/cynapse-memory" }
-mazzaroth = { path = "../../crates/mazzaroth" }
+dendrite-3d = { path = "../../crates/dendrite-3d" }
 serde = { version = "1", features = ["derive"] }
 ratatui = "0.29"
 crossterm = "0.28"

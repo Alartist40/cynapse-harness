@@ -1,4 +1,4 @@
-//! Mazzaroth — Pure Rust Ratatui 3D Celestial Galaxy Visualization & Hierarchical Orbit Engine.
+//! Dendrite-3D — Pure Rust Ratatui 3D Celestial Galaxy Visualization & Hierarchical Orbit Engine for Cynapse Memory.
 
 pub mod builder;
 pub mod physics;

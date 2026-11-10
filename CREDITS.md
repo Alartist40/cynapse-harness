@@ -51,7 +51,7 @@ We extend our deep gratitude and legal attribution to the original authors and m
 - **[Dendrite Memory System]**
   - **Inspiration**: Force-directed 3D knowledge graph dynamics utilizing Hooke's elastic springs and Coulomb's electrostatic repulsion physics, integrated with embedded SQLite FTS5 full-text indexing and BM25 relevance ranking.
 
-- **[Mazzaroth 3D Celestial Engine](https://github.com/Alartist40/cynapse-harness/tree/main/crates/mazzaroth)** — *Mazzaroth Contributors*
+- **[Dendrite-3D Celestial Engine](https://github.com/Alartist40/cynapse-harness/tree/main/crates/dendrite-3d)** — *3D Galaxy Perspective & Orbital Physics Engine for Dendrite Memory*
   - **Inspiration**: 3D orbital projection math, Euler yaw/pitch camera matrix transformations, and multi-tier galaxy atlas hierarchy rendered inside pure ASCII/Ratatui canvas buffers.
   - **License**: MIT License.
 

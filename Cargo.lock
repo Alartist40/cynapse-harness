@@ -680,8 +680,8 @@ dependencies = [
  "cynapse-core",
  "cynapse-engine",
  "cynapse-memory",
+ "dendrite-3d",
  "dirs 5.0.1",
- "mazzaroth",
  "ratatui",
  "regex",
  "serde",
@@ -773,6 +773,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b1e3a325bc115f096c8b77bbf027a7c2592230e70be2d985be950d3d5e60ebe"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "dendrite-3d"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
 ]
 
 [[package]]
@@ -1865,13 +1872,6 @@ checksum = "3f607c237553f086e7043417a51df26b2eb899d3caff94e6a67592ff992fedc7"
 dependencies = [
  "autocfg",
  "rawpointer",
-]
-
-[[package]]
-name = "mazzaroth"
-version = "0.1.0"
-dependencies = [
- "ratatui",
 ]
 
 [[package]]

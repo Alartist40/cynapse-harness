@@ -190,7 +190,7 @@ In [`engine/leafcutter_core/rust/src/inference/speculative.rs`](file:///home/xan
 Located in [`harness/cynapse-tui/src/app.rs`](file:///home/xander/Documents/portfolio/cynapse-mini/harness/cynapse-tui/src/app.rs):
 - **Safety Fail-Closed**: Any tool flagged in a bot profile's `tools_ask` halts execution and surfaces the interactive Ratatui modal.
 - **In-Place Field Editing**: Pressing `e` enters interactive parameter modification mode. Users can modify `arg1` (e.g. file paths) or `arg2` (contents/commands) using `[Tab]`, type corrections in real time, and press `[Enter]` to commit before approving (`y`).
-- **3D Celestial Perspective**: The Mazzaroth 3D perspective camera (`Camera3D`) renders the dendrite memory galaxy with realistic depth attenuation and orbital geometry.
+- **3D Celestial Perspective**: The Dendrite-3D perspective camera (`Camera3D`) renders the dendrite memory galaxy with realistic depth attenuation and orbital geometry.
 
 ---
 

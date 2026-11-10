@@ -6073,7 +6073,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
         // Canvas grid buffer initialized to clean empty space
         let mut grid: Vec<Vec<(char, Style)>> = vec![vec![(' ', Style::default()); width]; height];
 
-        let mut cam = mazzaroth::renderer::Camera3D::new();
+        let mut cam = dendrite_3d::renderer::Camera3D::new();
         cam.yaw = self.galaxy_yaw;
         cam.pitch = self.galaxy_pitch;
         cam.distance = 38.0;
@@ -6087,7 +6087,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
         ];
 
         for (sx, sy, sz) in star_seeds {
-            let pt = mazzaroth::renderer::GalaxyRenderer::project_point([sx, sy, sz], &cam, width as u16, height as u16);
+            let pt = dendrite_3d::renderer::GalaxyRenderer::project_point([sx, sy, sz], &cam, width as u16, height as u16);
             if pt.visible {
                 let px = pt.screen_x as usize;
                 let py = pt.screen_y as usize;
@@ -6106,7 +6106,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                 let rx = r * theta.cos();
                 let rz = r * theta.sin();
                 let ry = 0.0;
-                let pt = mazzaroth::renderer::GalaxyRenderer::project_point([rx, ry, rz], &cam, width as u16, height as u16);
+                let pt = dendrite_3d::renderer::GalaxyRenderer::project_point([rx, ry, rz], &cam, width as u16, height as u16);
                 if pt.visible {
                     let px = pt.screen_x as usize;
                     let py = pt.screen_y as usize;
@@ -6121,7 +6121,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
         let supermassive = self.graph.supermassive_node();
         let supermassive_id = supermassive.as_ref().map(|n| n.id.as_str());
 
-        let sun_pt = mazzaroth::renderer::GalaxyRenderer::project_point([0.0, 0.0, 0.0], &cam, width as u16, height as u16);
+        let sun_pt = dendrite_3d::renderer::GalaxyRenderer::project_point([0.0, 0.0, 0.0], &cam, width as u16, height as u16);
         if sun_pt.visible {
             let cpx = sun_pt.screen_x as usize;
             let cpy = sun_pt.screen_y as usize;
@@ -6158,7 +6158,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
             let pz_3d = orbit_r * current_angle.sin();
             let py_3d = 0.6 * (current_angle * 1.5).sin();
 
-            let planet_pt = mazzaroth::renderer::GalaxyRenderer::project_point([px_3d, py_3d, pz_3d], &cam, width as u16, height as u16);
+            let planet_pt = dendrite_3d::renderer::GalaxyRenderer::project_point([px_3d, py_3d, pz_3d], &cam, width as u16, height as u16);
             if planet_pt.visible {
                 let px = planet_pt.screen_x as usize;
                 let py = planet_pt.screen_y as usize;
@@ -6178,7 +6178,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     let mz_3d = pz_3d + moon_r * moon_angle.sin();
                     let my_3d = py_3d + moon_r * 0.3 * moon_angle.sin();
 
-                    let moon_pt = mazzaroth::renderer::GalaxyRenderer::project_point([mx_3d, my_3d, mz_3d], &cam, width as u16, height as u16);
+                    let moon_pt = dendrite_3d::renderer::GalaxyRenderer::project_point([mx_3d, my_3d, mz_3d], &cam, width as u16, height as u16);
                     if moon_pt.visible {
                         let mx = moon_pt.screen_x as usize;
                         let my = moon_pt.screen_y as usize;
