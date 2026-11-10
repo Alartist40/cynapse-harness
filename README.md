@@ -59,6 +59,7 @@ Type `/` in the prompt bar to trigger the floating command menu:
 | `/persona` | Manage agent personality markdown files (`IDENTITY`, `SOUL`, `USER`, custom `.md`) |
 | `/bots` | Manage bot profiles; `/bots spawn <slug> <task>`, `/bots status [id]`, `/bots cancel <id\|all>` |
 | `/doctor` | Launch Cynapse Doctor self-healing diagnostic dashboard |
+| `/security` | Launch Zero-Breach digital forensics threat scanner & inspection dashboard |
 | `/memory` | Launch 3D Orbital Galaxy Memory Atlas visualizer |
 | `/drawer` | Open interactive Dendrite Memory drawer inspector |
 | `/synapse` | Manage modular Synapse tool extensions (`soup`, `finetune`, etc.) |

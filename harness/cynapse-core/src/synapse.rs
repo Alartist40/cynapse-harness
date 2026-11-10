@@ -111,28 +111,67 @@ impl SynapseRegistry {
         let mut map = self.manifests.lock().unwrap_or_else(|e| e.into_inner());
         map.clear();
 
-        if let Ok(entries) = fs::read_dir(&self.synapses_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let manifest_file = path.join("synapse.toml");
-                    let json_manifest = path.join("synapse.json");
+        let search_dirs = vec![
+            self.synapses_dir.clone(),
+            PathBuf::from("./synapses"),
+        ];
 
-                    if manifest_file.exists() {
-                        if let Ok(content) = fs::read_to_string(&manifest_file) {
-                            if let Ok(m) = toml::from_str::<SynapseManifest>(&content) {
-                                map.insert(m.name.clone(), m);
+        for sdir in search_dirs {
+            if let Ok(entries) = fs::read_dir(&sdir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let manifest_file = path.join("synapse.toml");
+                        let json_manifest = path.join("synapse.json");
+
+                        if manifest_file.exists() {
+                            if let Ok(content) = fs::read_to_string(&manifest_file) {
+                                if let Ok(m) = toml::from_str::<SynapseManifest>(&content) {
+                                    map.insert(m.name.clone(), m);
+                                }
                             }
-                        }
-                    } else if json_manifest.exists() {
-                        if let Ok(content) = fs::read_to_string(&json_manifest) {
-                            if let Ok(m) = serde_json::from_str::<SynapseManifest>(&content) {
-                                map.insert(m.name.clone(), m);
+                        } else if json_manifest.exists() {
+                            if let Ok(content) = fs::read_to_string(&json_manifest) {
+                                if let Ok(m) = serde_json::from_str::<SynapseManifest>(&content) {
+                                    map.insert(m.name.clone(), m);
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+
+        // Built-in sovereign Zero-Breach extension registration
+        if !map.contains_key("zero_breach") {
+            map.insert(
+                "zero_breach".to_string(),
+                SynapseManifest {
+                    name: "zero_breach".to_string(),
+                    title: "Zero-Breach Sovereign Digital Forensics".to_string(),
+                    version: "1.0.0".to_string(),
+                    author: Some("Interplains / Cynapse".to_string()),
+                    description: "Read-only digital forensics for Candiru/AdFection threat indicators with Doctrine D2 zero-network isolation".to_string(),
+                    enabled: Some(true),
+                    tools: vec![SynapseToolDef {
+                        name: "security_forensic_scan".to_string(),
+                        description: "Execute read-only digital forensics scan across local browser histories, caches, cookies, and DNS artifacts for threat indicators (Candiru/AdFection) with zero-network isolation".to_string(),
+                        command: String::new(),
+                        transport: "internal".to_string(),
+                        concurrency_safe: true,
+                        input_schema: Some(serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                "scan_type": {
+                                    "type": "string",
+                                    "enum": ["quick", "full"],
+                                    "description": "Quick scan (browsers + DNS) or full scan (includes file hash search)"
+                                }
+                            }
+                        })),
+                    }],
+                },
+            );
         }
     }
 
@@ -192,7 +231,13 @@ impl SynapseRegistry {
 
         let synapse_path = self.synapses_dir.join(syn_name);
         let cmd_str = &tool_def.command;
-        if cmd_str.trim().is_empty() {
+        if tool_name == "security_forensic_scan" || cmd_str.trim().is_empty() {
+            if tool_name == "security_forensic_scan" {
+                let deep = arguments.get("scan_type").and_then(|v| v.as_str()).map(|s| s == "full" || s == "deep").unwrap_or(false)
+                    || arguments.get("arg1").and_then(|v| v.as_str()).map(|s| s.contains("full") || s.contains("deep")).unwrap_or(false);
+                let report = crate::forensics::run_forensic_scan(deep);
+                return Ok(report.to_summary());
+            }
             return Ok(format!("Tool '{}' executed successfully with arguments: {}", tool_name, arguments));
         }
 

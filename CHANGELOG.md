@@ -2,6 +2,16 @@
 
 All notable changes to Cynapse are documented here.
 
+## [Unreleased] — Zero-Breach Sovereign Digital Forensics & Doctrine D2 Integration (2026-11-10)
+
+### Added
+- **Zero-Breach Sovereign Digital Forensics Engine (`forensics.rs`)**: Reverse engineered Interplains Zero-Breach digital forensics tool into 100% pure safe Rust; embedded curated AdFection / Candiru threat indicators (591 indicators across domains, IPs, and SHA256 hashes).
+- **Doctrine D2 Air-Gapped Zero-Network Guarantee**: 0 outbound network requests, 0 socket allocations, 0 DNS resolution attempts; strictly read-only local string and hash matching to prevent alerting attacker infrastructure.
+- **Cross-Platform Multi-Browser SQLite Forensics**: Automated detection and read-only inspection of Google Chrome, Chromium, Brave, Microsoft Edge, Vivaldi, and Mozilla Firefox histories, cookies, and local DNS/hosts artifacts using non-locking isolated memory snapshots.
+- **Interactive TUI Dashboard (`/security`)**: Real-time Ratatui modal displaying threat status badge, platform hardware detection, artifact scan count, IOC match details, coverage gaps, and quick/deep mode toggle (`[d]`).
+- **AI-Callable Forensic Tool (`security_forensic_scan`)**: Exposed to JSON tool schema with parameter coercion, GBNF schema critic, and intent routing for `@needle` and `@auditor`.
+- **Zero-Breach Synapse Extension Pack**: Added `./synapses/zero_breach/synapse.toml` manifest for plug-and-play extension management via `/synapse`.
+
 ## [Unreleased] — High-Throughput Leafcutter Engine, Asynchronous Prefetching & Speculative Telemetry (2026-11-05)
 
 ### Added

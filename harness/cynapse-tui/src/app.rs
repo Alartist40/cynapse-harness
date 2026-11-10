@@ -64,6 +64,7 @@ pub enum ActiveModal {
     ThemePicker,
     CommandPalette,
     Doctor,
+    SecurityForensics,
     PersonaManager,
     Bots,
     ToolApproval,
@@ -189,6 +190,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/model", description: "Open interactive model selector" },
     SlashCommand { name: "/theme", description: "Open interactive visual color theme switcher" },
     SlashCommand { name: "/doctor", description: "Run self-healing Cynapse Doctor system diagnostic & recovery" },
+    SlashCommand { name: "/security", description: "Zero-Breach digital forensics threat scanner & inspection dashboard" },
     SlashCommand { name: "/pull", description: "Download GGUF model from HuggingFace (hardware curated)" },
     SlashCommand { name: "/persona", description: "Manage agent personality markdown files (IDENTITY, SOUL, USER)" },
     SlashCommand { name: "/bots", description: "List and inspect configured subagent bot profiles" },
@@ -370,6 +372,11 @@ pub struct TuiApp {
     pub speculative_accepted_drafts: usize,
     pub speculative_total_drafts: usize,
     pub current_streaming_layer: Option<(usize, usize)>,
+
+    // Zero-Breach Digital Forensics
+    pub security_report: Option<cynapse_core::forensics::ForensicScanReport>,
+    pub security_scanning: bool,
+    pub security_deep_mode: bool,
 }
 
 impl TuiApp {
@@ -500,6 +507,9 @@ impl TuiApp {
             speculative_accepted_drafts: 0,
             speculative_total_drafts: 0,
             current_streaming_layer: None,
+            security_report: None,
+            security_scanning: false,
+            security_deep_mode: false,
         }
     }
 
@@ -1597,7 +1607,7 @@ impl TuiApp {
                                         if self.palette_selected_idx > 0 {
                                             self.palette_selected_idx -= 1;
                                         } else {
-                                            self.palette_selected_idx = 13;
+                                            self.palette_selected_idx = 14;
                                         }
                                     }
                                     _ => {}
@@ -1630,11 +1640,15 @@ impl TuiApp {
                                         self.selected_bot_idx = self.selected_bot_idx.saturating_add(1);
                                     }
                                     ActiveModal::CommandPalette => {
-                                        self.palette_selected_idx = (self.palette_selected_idx + 1) % 14;
+                                        self.palette_selected_idx = (self.palette_selected_idx + 1) % 15;
                                     }
                                     _ => {}
                                 },
                                 KeyCode::Char('d') | KeyCode::Delete => match self.modal {
+                                    ActiveModal::SecurityForensics => {
+                                        self.security_deep_mode = !self.security_deep_mode;
+                                        self.security_report = Some(cynapse_core::forensics::run_forensic_scan(self.security_deep_mode));
+                                    }
                                     ActiveModal::MemoryDrawer => {
                                         let nodes = self.graph.all();
                                         if !nodes.is_empty() {
@@ -1715,6 +1729,9 @@ impl TuiApp {
                                     _ => {}
                                 },
                                 KeyCode::Char('r') | KeyCode::F(5) => match self.modal {
+                                    ActiveModal::SecurityForensics => {
+                                        self.security_report = Some(cynapse_core::forensics::run_forensic_scan(self.security_deep_mode));
+                                    }
                                     ActiveModal::Doctor => {
                                         let db_path = dirs::home_dir().map(|h| h.join(".cynapse").join("dendrite.db")).unwrap_or_else(|| PathBuf::from("data/dendrite.db"));
                                         let doctor = cynapse_core::doctor::CynapseDoctor::new(self.models_dir.clone(), db_path, true);
@@ -1813,12 +1830,18 @@ impl TuiApp {
                                     }
                                     ActiveModal::CommandPalette => {
                                         const PALETTE_COMMANDS: &[&str] = &[
-                                            "/help", "/dendrite", "/theme", "/model", "/session", "/doctor",
+                                            "/help", "/dendrite", "/theme", "/model", "/session", "/doctor", "/security",
                                             "/spec", "/rewind", "/fork", "/bots", "/persona", "/undo", "/clear", "/exit"
                                         ];
                                         let sel = PALETTE_COMMANDS[self.palette_selected_idx.min(PALETTE_COMMANDS.len() - 1)];
                                         self.modal = ActiveModal::None;
                                         match sel {
+                                            "/security" => {
+                                                if self.security_report.is_none() {
+                                                    self.security_report = Some(cynapse_core::forensics::run_forensic_scan(self.security_deep_mode));
+                                                }
+                                                self.modal = ActiveModal::SecurityForensics;
+                                            }
                                             "/spec" => {
                                                 self.speculative_decoding_enabled = !self.speculative_decoding_enabled;
                                                 self.messages.push(ChatMessage {
@@ -2359,6 +2382,14 @@ impl TuiApp {
                                     let doctor = cynapse_core::doctor::CynapseDoctor::new(self.models_dir.clone(), db_path, true);
                                     self.doctor_report = Some(doctor.run_diagnostics());
                                     self.modal = ActiveModal::Doctor;
+                                    continue;
+                                }
+
+                                if trimmed == "/security" || trimmed == "/forensics" || trimmed == "/threat" || trimmed == "/scan" {
+                                    if self.security_report.is_none() {
+                                        self.security_report = Some(cynapse_core::forensics::run_forensic_scan(self.security_deep_mode));
+                                    }
+                                    self.modal = ActiveModal::SecurityForensics;
                                     continue;
                                 }
 
@@ -4196,6 +4227,98 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Cynapse Self-Healing Doctor ").border_style(t.active_border_style()));
                 f.render_widget(modal, area);
             }
+            ActiveModal::SecurityForensics => {
+                let area = centered_rect(88, 78, f.area());
+                f.render_widget(Clear, area);
+
+                let mut lines = Vec::new();
+                lines.push(Line::from(vec![
+                    Span::styled("🛡️ ZERO-BREACH SOVEREIGN DIGITAL FORENSICS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::raw("  │  "),
+                    Span::styled("AIR-GAPPED THREAT INSPECTION", Style::default().fg(Color::LightCyan)),
+                ]));
+                lines.push(Line::from("──────────────────────────────────────────────────────────────────────────────"));
+
+                if let Some(rep) = &self.security_report {
+                    let status_style = match rep.status {
+                        cynapse_core::forensics::ForensicStatus::Clean => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        cynapse_core::forensics::ForensicStatus::ThreatDetected => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        cynapse_core::forensics::ForensicStatus::GapsOnly => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    };
+
+                    lines.push(Line::from(vec![
+                        Span::raw("Threat Status: "),
+                        Span::styled(format!("[ {} ]", rep.status.badge()), status_style),
+                        Span::raw("  │  Doctrine D2: "),
+                        Span::styled("[ 0 NETWORK EGRESS / AIR-GAPPED ]", Style::default().fg(Color::LightCyan)),
+                    ]));
+
+                    lines.push(Line::from(vec![
+                        Span::styled("Hardware Target: ", t.dim_text()),
+                        Span::styled(&rep.platform, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!(" ({})", rep.hardware), Style::default().fg(Color::Yellow)),
+                        Span::raw("  │  Scan Duration: "),
+                        Span::styled(format!("{}ms", rep.scan_duration_ms), Style::default().fg(Color::Green)),
+                    ]));
+
+                    lines.push(Line::from(vec![
+                        Span::styled("Coverage Telemetry: ", t.dim_text()),
+                        Span::styled(format!("{} artifacts inspected", rep.total_artifacts_scanned), Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)),
+                        Span::raw("  │  Known IOCs Evaluated: "),
+                        Span::styled(format!("{}", rep.iocs_loaded), Style::default().fg(Color::White)),
+                        Span::raw(format!("  │  Mode: {}", if self.security_deep_mode { "DEEP (Hash Sweep)" } else { "QUICK" })),
+                    ]));
+                    lines.push(Line::from("──────────────────────────────────────────────────────────────────────────────"));
+
+                    if rep.findings.is_empty() {
+                        lines.push(Line::from(Span::styled("✓ NO KNOWN CANDIRU / DEVILSTONGUE / ADFECTION INDICATORS FOUND", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))));
+                        lines.push(Line::from(Span::styled("  All inspected browser histories, cookies, DNS hosts, and staging hashes are clean.", Style::default().fg(Color::Gray))));
+                    } else {
+                        lines.push(Line::from(Span::styled(format!("🚨 CRITICAL: {} THREAT INDICATOR(S) MATCHED:", rep.findings.len()), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))));
+                        for f_item in &rep.findings {
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("  • [{}] ", f_item.indicator_type), Style::default().fg(Color::Red)),
+                                Span::styled(&f_item.indicator, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                                Span::styled(format!(" (Tier: {}, Source: {})", f_item.tier, f_item.source), Style::default().fg(Color::DarkGray)),
+                            ]));
+                            lines.push(Line::from(Span::styled(format!("    Location: {}", f_item.artifact_path), Style::default().fg(Color::White))));
+                            lines.push(Line::from(Span::styled(format!("    Context:  {}", f_item.match_context), Style::default().fg(Color::Red))));
+                        }
+                    }
+
+                    if !rep.gaps.is_empty() {
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(Span::styled(format!("Coverage Gaps & Inaccessible Targets ({} unreadable):", rep.gaps.len()), Style::default().fg(Color::Yellow))));
+                        for g in rep.gaps.iter().take(4) {
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("  - [{}] ", g.category), Style::default().fg(Color::DarkGray)),
+                                Span::styled(&g.target, Style::default().fg(Color::Gray)),
+                                Span::raw(format!(": {}", g.reason)),
+                            ]));
+                        }
+                        if rep.gaps.len() > 4 {
+                            lines.push(Line::from(Span::styled(format!("    ... and {} other unreadable targets", rep.gaps.len() - 4), Style::default().fg(Color::DarkGray))));
+                        }
+                    }
+                } else {
+                    lines.push(Line::from("Running digital forensics scan across local artifacts..."));
+                }
+
+                lines.push(Line::from("──────────────────────────────────────────────────────────────────────────────"));
+                lines.push(Line::from(vec![
+                    Span::styled("[Enter/r]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::raw(" Rescan  │  "),
+                    Span::styled("[d]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::raw(format!(" Toggle Deep Scan ({})  │  ", if self.security_deep_mode { "ON" } else { "OFF" })),
+                    Span::styled("[Esc]", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                    Span::raw(" Close"),
+                ]));
+
+                let modal = Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Zero-Breach Digital Forensics Dashboard ").border_style(t.active_border_style()));
+                f.render_widget(modal, area);
+            }
             ActiveModal::MemoryGraph => {
                 // Handled in primary viewport canvas
             }
@@ -4355,6 +4478,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     ("/model", "Switch or pull LLM models"),
                     ("/session", "Saved conversation sessions"),
                     ("/doctor", "System self-healing diagnostics"),
+                    ("/security", "Zero-Breach digital forensics threat scanner"),
                     ("/spec", "Toggle n-gram speculative prompt lookup"),
                     ("/rewind", "Rewind last conversational turn"),
                     ("/fork", "Branch session into new fork"),

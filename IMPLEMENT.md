@@ -245,3 +245,34 @@ Docs brought current: README (MAX_AGENT_STEPS 14, 14-check doctor + exit-1, inst
      - `./target/release/cynapse doctor`: 100% Health Score (22 Pass | 0 Warning | 0 Repaired | 0 Failed).
 - Decision & Rationale: Eliminates I/O wait bubbles on slow or shared NVMe/SATA drives during large model streaming, ensures robust cross-platform acceleration on all ARM64 architectures, and gives users real-time visibility and control over speculative inference.
 - Next: Ready for production use.
+
+
+## [Stage 39: Zero-Breach Sovereign Digital Forensics & Doctrine D2 Zero-Network Engine]
+- Action:
+  1. **Reverse Engineered Zero-Breach Architecture (`forensics.rs`)**:
+     - Analyzed Interplains Zero-Breach IOC format, browser history extraction, cookie stores, hosts files, and sample hash verification.
+     - Reconstructed the scanner in 100% pure safe Rust (`harness/cynapse-core/src/forensics.rs`), eliminating all Python virtual environments and external script overhead.
+     - Embedded curated AdFection / Candiru indicator set (`adfection_iocs.txt`, 591 indicators across domains, IPs, and sample hashes).
+  2. **Doctrine D2 (Zero-Network Isolation)**:
+     - Structural architectural guarantee: 0 network libraries, 0 sockets, 0 DNS queries. All lookups are offline string / hash / regex matching.
+     - Read-only SQLite snapshot isolation: browser history and cookies are snapshotted to temporary read-only memory files before querying, completely preventing database lock contention or file corruption while browsers are active.
+  3. **Cross-Platform Hardware Awareness**:
+     - Connects with Cynapse's hardware detector (`detect_forensics_platform`) to determine host OS (Linux, Windows, macOS) and architecture (x86_64, ARM SBC).
+     - Automatically routes scan paths to detected platform-specific browser profile locations (Google Chrome, Chromium, Brave, Microsoft Edge, Vivaldi, Mozilla Firefox).
+  4. **AI-Activatable Tool Call Integration**:
+     - Added `security_forensic_scan` to `list_tools()` and `execute_tool()` in `cynapse-core/src/lib.rs`.
+     - Integrated into `offline_agent.rs` with automatic argument coercion, System 2 schema critic, and intent routing (`asks_security`).
+     - Added `"security_forensic_scan"` to allowed tools for `@needle` and `@auditor` bot profiles.
+  5. **Interactive TUI Forensics Dashboard (`cynapse-tui/src/app.rs`)**:
+     - Added `ActiveModal::SecurityForensics` modal and `/security` slash command.
+     - Displays real-time threat status badge, Doctrine D2 isolation proof, hardware target, artifact counts, findings list, and coverage gaps.
+     - Added hotkeys: `[Enter/r]` to rescan, `[d]` to toggle deep scan, `[Esc]` to close.
+  6. **Synapse Extension Packaging**:
+     - Created `./synapses/zero_breach/synapse.toml` and `./synapses/zero_breach/adfection_iocs.txt`.
+     - Updated `SynapseRegistry` to discover local workspace synapses and register built-in sovereign extensions.
+  7. **Verification**:
+     - Ran unit tests: `forensics::tests::test_parse_embedded_iocs`, `forensics::tests::test_matches_domain_boundary`, `forensics::tests::test_run_forensic_scan_execution`, `tests::test_security_forensic_scan_tool_routing` (All Passed).
+     - Recompiled release binary `./target/release/cynapse` (9.5 MB standalone).
+     - Verified `cynapse doctor`: 100% Health Score (22 Pass).
+- Decision & Rationale: Eliminates third-party script risks and dependency hell while delivering instant, air-gapped forensic threat detection directly inside the Cynapse TUI and agent tool loop.
+- Next: Production deployment and user testing.

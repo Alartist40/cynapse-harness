@@ -11,6 +11,7 @@ pub mod bots;
 pub mod compressor;
 pub mod doctor;
 pub mod downloader;
+pub mod forensics;
 pub mod gates;
 pub mod offline_agent;
 pub mod persona;
@@ -83,6 +84,11 @@ pub fn list_tools() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "memory_inspect",
             description: "Inspect the full content and metadata of a specific memory node by ID",
+            concurrency_safe: true,
+        },
+        ToolDefinition {
+            name: "security_forensic_scan",
+            description: "Execute read-only digital forensics scan across local browser histories, caches, cookies, and DNS artifacts for threat indicators (Candiru/AdFection) with zero-network isolation",
             concurrency_safe: true,
         },
     ]
@@ -475,6 +481,15 @@ pub fn execute_tool(name: &str, arg1: &str, arg2: Option<&str>) -> Result<String
             }
             out.push(format!("\nContent:\n{}", node.content));
             Ok(out.join("\n"))
+        }
+        "security_forensic_scan" => {
+            let deep = arg1.to_lowercase().contains("deep") || arg1.to_lowercase().contains("full") || arg1 == "true";
+            let report = forensics::run_forensic_scan(deep);
+            if arg1.contains("json") || arg2.map(|a| a.contains("json")).unwrap_or(false) {
+                Ok(report.to_json())
+            } else {
+                Ok(report.to_summary())
+            }
         }
         _ => {
             // Check dynamic Synapse extensions
@@ -961,5 +976,17 @@ mod tests {
         assert!(inspect_res.contains("Detailed secret signing and rotation procedure for JWTs."));
 
         std::env::remove_var("CYNAPSE_DENDRITE_DB");
+    }
+
+    #[test]
+    fn test_security_forensic_scan_tool_routing() {
+        let call = offline_agent::ToolCall {
+            name: "security_forensic_scan".to_string(),
+            arguments: serde_json::json!({ "scan_type": "quick" }),
+        };
+        let out = execute_tool_call(&call).unwrap();
+        assert!(out.contains("ZERO-BREACH DIGITAL FORENSICS REPORT"));
+        assert!(out.contains("Doctrine D2 Zero-Network: Guaranteed"));
+        assert!(out.contains("Loaded IOCs:"));
     }
 }

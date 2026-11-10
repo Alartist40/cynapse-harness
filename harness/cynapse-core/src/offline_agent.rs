@@ -341,6 +341,7 @@ pub fn tool_canonical_params(tool_name: &str) -> &'static [&'static str] {
         "memory_search" => &["query", "limit"],
         "memory_timeline" => &["node_id", "limit"],
         "memory_inspect" => &["node_id"],
+        "security_forensic_scan" => &["scan_type", "include_browser"],
         _ => &["arg1", "arg2"],
     }
 }
@@ -456,6 +457,9 @@ pub fn coerce_tool_arguments(tool_name: &str, args: &serde_json::Value) -> serde
                 }
                 "memory_timeline" | "memory_inspect" => {
                     map.insert("node_id".to_string(), serde_json::Value::String(s.clone()));
+                }
+                "security_forensic_scan" => {
+                    map.insert("scan_type".to_string(), serde_json::Value::String(s.clone()));
                 }
                 _ => {
                     map.insert("arg1".to_string(), serde_json::Value::String(s.clone()));
@@ -861,6 +865,8 @@ pub fn prune_tools_for_query(user_query: &str) -> Vec<crate::ToolDefinition> {
     let asks_exec = has_explicit_cmd;
     let asks_memory = words.iter().any(|&w| w == "memory" || w == "remember" || w == "recall" || w == "timeline")
         || lower.contains("in memory") || lower.contains("search memory") || lower.contains("memory search");
+    let asks_security = words.iter().any(|&w| w == "security" || w == "forensic" || w == "threat" || w == "spyware" || w == "malware" || w == "breach" || w == "candiru" || w == "adfection")
+        || lower.contains("security scan") || lower.contains("forensic scan") || lower.contains("check threat");
 
     for t in all_tools {
         match t.name {
@@ -869,6 +875,7 @@ pub fn prune_tools_for_query(user_query: &str) -> Vec<crate::ToolDefinition> {
             "grep" if asks_search => selected.push(t),
             "execute_command" if asks_exec => selected.push(t),
             "memory_search" | "memory_timeline" | "memory_inspect" if asks_memory => selected.push(t),
+            "security_forensic_scan" if asks_security => selected.push(t),
             "run_gates" if lower.contains("gate") || lower.contains("check gates") || lower.contains("run gates") => selected.push(t),
             _ => {}
         }
@@ -893,6 +900,7 @@ pub fn get_tool_exemplar(tool_name: &str) -> &'static str {
         "memory_search" => "```json\n{\"name\": \"memory_search\", \"arguments\": {\"query\": \"auth tokens\"}}\n```",
         "memory_timeline" => "```json\n{\"name\": \"memory_timeline\", \"arguments\": {\"node_id\": \"auth_rule\"}}\n```",
         "memory_inspect" => "```json\n{\"name\": \"memory_inspect\", \"arguments\": {\"node_id\": \"auth_rule\"}}\n```",
+        "security_forensic_scan" => "```json\n{\"name\": \"security_forensic_scan\", \"arguments\": {\"scan_type\": \"quick\"}}\n```",
         _ => "```json\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"Cargo.toml\"}}\n```",
     }
 }

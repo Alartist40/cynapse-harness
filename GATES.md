@@ -210,3 +210,8 @@
   EXPECT: G40 PASS
   EVIDENCE: 244 workspace unit tests passed (0 failed). Double-buffered asynchronous layer prefetcher overlaps disk reads with compute in `streaming_ornith.rs`; dynamic chunk-sizing scales prefill memory in `detect.rs`; ARM NEON dotprod fallback vectorization active in `q8_k_gemm.rs`; TUI `/spec` toggle & F6 keybinding with live draft tracking and visual layer streaming gauge active; slowed rhythmic braille wave animation in header bar; 100% Doctor Health Score (22 Pass).
 
+- [x] G41: Zero-Breach Sovereign Digital Forensics & Doctrine D2 Zero-Network Extension
+  CHECK: cargo test -p cynapse-core forensics && ./target/release/cynapse doctor && echo "G41 PASS"
+  EXPECT: G41 PASS
+  EVIDENCE: 85 cynapse-core unit tests passed (0 failed). Reverse engineered Interplains Zero-Breach digital forensics engine into pure safe Rust in `cynapse-core/src/forensics.rs`; Doctrine D2 air-gapped zero-network verification; read-only scanning across Chromium (Chrome, Brave, Edge, Vivaldi, Chromium) & Firefox SQLite histories/cookies, system hosts file, and SHA256 sample hashes; exposed `/security` interactive TUI dashboard modal in `cynapse-tui`; exposed `security_forensic_scan` atomic tool to JSON tool schema for `@needle` and `@auditor`; created `./synapses/zero_breach/synapse.toml`.
+

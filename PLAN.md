@@ -317,6 +317,16 @@ Working tree already contains, in `cynapse.toml` + `engine/cynapse-engine/src/li
   - Layer Streaming Mini-Gauge (`cynapse-tui/app.rs`): real-time horizontal progress indicator `Layer Streaming: [████████░░░░] L12/40 (30%)` in message scroll bar.
   - Verified 244+ workspace tests passing and 100% Doctor Health Score (22 Pass).
 
+- **Stage 39: Zero-Breach Sovereign Digital Forensics & Doctrine D2 Zero-Network Engine [DONE — G41 PASSED 2026-11-10]**
+  `OWNS: harness/cynapse-core/src/forensics.rs, harness/cynapse-core/src/lib.rs, harness/cynapse-core/src/offline_agent.rs, harness/cynapse-tui/src/app.rs, synapses/zero_breach/`
+  - Reverse engineered Interplains Zero-Breach digital forensics tool into pure safe Rust with zero external Python bloat.
+  - Embedded curated AdFection / Candiru IOC dataset (591 indicators: domains, IPs, SHA256 hashes).
+  - Enforced Doctrine D2 ("never contact an indicator"): 100% air-gapped matching, zero outbound sockets, zero DNS queries.
+  - Implemented multi-browser SQLite history & cookie scanner (Chromium, Chrome, Brave, Edge, Vivaldi, Firefox) using non-locking isolated temp snapshots.
+  - Exposed `/security` interactive TUI inspection dashboard modal in `cynapse-tui`.
+  - Exposed `security_forensic_scan` atomic tool to JSON tool schema for `@needle`, `@auditor`, and autonomous agents.
+  - Seeded `./synapses/zero_breach/synapse.toml` extension manifest.
+
 ## Out of scope (deferred, recorded not dropped)
 - P2 table: app.rs 230 KB split, ripgrep fast path, eval_count tok/s parsing, per-provider payload generation beyond sampling(), Ollama llama.cpp-only field removal.
 - Native RoPE/q_proj/pair-convention math rewrite — research track; arch-refusal (stage 26) contains the blast radius until the parity harness (stage 30) exists.

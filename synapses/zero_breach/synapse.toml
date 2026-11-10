@@ -1,0 +1,14 @@
+[synapse]
+name = "zero_breach"
+title = "Zero-Breach Sovereign Digital Forensics"
+version = "1.0.0"
+author = "Interplains / Cynapse"
+description = "Read-only digital forensics for Candiru/AdFection threat indicators with Doctrine D2 zero-network isolation"
+enabled = true
+
+[[tools]]
+name = "security_forensic_scan"
+description = "Execute read-only digital forensics scan across local browser histories, caches, cookies, and DNS artifacts for threat indicators (Candiru/AdFection) with zero-network isolation"
+command = ""
+transport = "internal"
+concurrency_safe = true
