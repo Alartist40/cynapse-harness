@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
             };
             let decision = route_model(&target, false);
             println!("======================================================================");
-            println!("             🧠 CYNAPSE SEMANTIC HARDWARE & MODEL ROUTER              ");
+            println!("             CYNAPSE SEMANTIC HARDWARE & MODEL ROUTER              ");
             println!("======================================================================");
             println!("Target Model Path:  {}", target.display());
             println!("Model Disk Size:    {:.2} MB", decision.model_size_mb);
@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
             let report = doctor.run_diagnostics();
 
             println!("======================================================================");
-            println!("           🩺 CYNAPSE AGENT SYSTEM SELF-HEALING DOCTOR                ");
+            println!("           CYNAPSE AGENT SYSTEM SELF-HEALING DOCTOR                ");
             println!("======================================================================");
             println!("Overall System Health Score: [ {}% ]", report.health_score);
             println!("Summary: {} Pass | {} Warning | {} Repaired | {} Failed", report.total_pass, report.total_warn, report.total_repaired, report.total_fail);
@@ -180,7 +180,7 @@ async fn main() -> Result<()> {
                     if std::io::stdin().read_line(&mut input).is_ok() {
                         let choice = input.trim().to_lowercase();
                         if choice == "r" {
-                            println!("\n🔧 Launching automatic self-healing remediation...");
+                            println!("\n[+] Launching automatic self-healing remediation...");
                             let fix_doctor = cynapse_core::doctor::CynapseDoctor::new(models_dir.clone(), db_path.clone(), true);
                             let fix_report = fix_doctor.run_diagnostics();
                             println!("Remediation complete. New Health Score: [ {}% ] (Repaired: {})", fix_report.health_score, fix_report.total_repaired);
@@ -204,7 +204,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 } else if !fix {
-                    println!("💡 Tip: Run 'cynapse doctor --fix' to execute automatic self-healing repairs.");
+                    println!("Tip: Run 'cynapse doctor --fix' to execute automatic self-healing repairs.");
                 }
             }
             if report.total_fail > 0 && !fix {
@@ -212,7 +212,7 @@ async fn main() -> Result<()> {
             }
         }
         Some(Commands::Clean { days }) => {
-            println!("🧹 Running Cynapse Workspace & Log Cleanup (Pruning files older than {} days)...", days);
+            println!("Running Cynapse Workspace & Log Cleanup (Pruning files older than {} days)...", days);
             let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
             let cynapse_dir = home.join(".cynapse");
             let mut cleaned_files = 0;

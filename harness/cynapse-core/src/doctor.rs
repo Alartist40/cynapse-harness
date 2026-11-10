@@ -100,7 +100,7 @@ impl DoctorStatus {
         match self {
             DoctorStatus::Pass => "[✓ PASS]",
             DoctorStatus::Warning => "[! WARN]",
-            DoctorStatus::Repaired => "[🔧 REPAIRED]",
+            DoctorStatus::Repaired => "[+ REPAIRED]",
             DoctorStatus::Failed => "[✗ FAIL]",
         }
     }

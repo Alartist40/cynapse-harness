@@ -35,6 +35,13 @@ transport = "stdio"
 concurrency_safe = true
 
 [[tools]]
+name = "soup_train"
+description = "Launch low-VRAM layer-streaming LoRA fine-tuning session on specified dataset"
+command = "python3 runner.py train"
+transport = "stdio"
+concurrency_safe = false
+
+[[tools]]
 name = "soup_export"
 description = "Export fine-tuned adapter / model to GGUF format for Cynapse Leafcutter or llama-server"
 command = "python3 runner.py export"

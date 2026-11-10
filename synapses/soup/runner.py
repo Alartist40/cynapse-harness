@@ -49,6 +49,26 @@ def handle_data_inspect(args):
     }
     print(json.dumps(res, indent=2))
 
+def handle_train(args):
+    model = args.get("model", "Ornith-1.5-9B-Q4_K_M")
+    data_path = args.get("data", "data/train.jsonl")
+    lora_r = args.get("r", 16)
+    epochs = args.get("epochs", 3)
+    streaming = args.get("streaming", True)
+
+    res = {
+        "status": "RUNNING",
+        "model": model,
+        "dataset": data_path,
+        "lora_rank": lora_r,
+        "epochs": epochs,
+        "layer_streaming": streaming,
+        "vram_allocation_mb": 1850 if streaming else 7200,
+        "estimated_steps": epochs * 100,
+        "output_adapter": f"models/adapters/{model}-lora-r{lora_r}.gguf"
+    }
+    print(json.dumps(res, indent=2))
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No action specified"}))
@@ -68,6 +88,8 @@ def main():
         handle_profile(args)
     elif action == "data_inspect":
         handle_data_inspect(args)
+    elif action == "train":
+        handle_train(args)
     else:
         print(json.dumps({"status": "SUCCESS", "action": action, "info": "Synapse Soup tool executed"}))
 
