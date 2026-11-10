@@ -69,6 +69,58 @@ def handle_train(args):
     }
     print(json.dumps(res, indent=2))
 
+def handle_synth(args):
+    out_path = args.get("out", "data/train.jsonl")
+    domain = args.get("domain", "cybersecurity_forensics")
+    count = int(args.get("count", 50))
+
+    topics = [
+        ("Doctrine D2 NetGuard Air-Gap Protocol",
+         "Explain how Doctrine D2 guarantees zero network egress during forensic triage.",
+         "Doctrine D2 enforces strict outbound isolation by monkeypatching OS socket syscalls (connect, sendto, getaddrinfo) to abort with EPERM. It ensures forensic scans analyze local artifacts without ever contacting an indicator of compromise."),
+        ("Layer-Streaming Low-RAM Fine-Tuning",
+         "Why does layer streaming enable LoRA post-training on a 16GB APU with 2GB VRAM allocation?",
+         "Standard QLoRA requires storing forward activations across all N decoder layers simultaneously. Layer streaming computes forward and backward passes one transformer block at a time, bounding activation RAM to O(1) single layer + rank-16 adapter (1,850 MB)."),
+        ("AdFection Spyware Artifact Triangulation",
+         "How does Zero-Breach verify Candiru / AdFection indicators without external network verification?",
+         "It correlates local browser LevelDB history, SQLite places databases, and system DNS resolver host records against 405 SHA-256 and domain signatures entirely offline using local boundary-matching logic."),
+        ("Speculative Prompt Lookup Acceleration",
+         "How does speculative decoding accelerate text generation on edge devices without a draft model?",
+         "Speculative prompt lookup scans the existing prompt and conversation history for matching n-gram prefixes. It predicts candidate continuation tokens directly from the input context, verifying them in parallel with one forward model pass."),
+        ("Sovereign Dendrite Memory Architecture",
+         "What makes Dendrite memory distinct from cloud vector stores?",
+         "Dendrite operates 100% locally using an embedded SQLite FTS5 index combined with 3D planetary celestial graph mapping. Nodes are permanently retained across sessions with zero external telemetry or cloud dependencies.")
+    ]
+
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    samples = []
+    for i in range(count):
+        topic_title, q, a = topics[i % len(topics)]
+        variant_idx = i // len(topics) + 1
+        entry = {
+            "messages": [
+                {"role": "system", "content": f"You are Cynapse Sovereign AI. Specialized domain: {domain}."},
+                {"role": "user", "content": f"{q} (Scenario {variant_idx})"},
+                {"role": "assistant", "content": f"[{topic_title}] {a}"}
+            ]
+        }
+        samples.append(entry)
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        for s in samples:
+            f.write(json.dumps(s) + "\n")
+
+    res = {
+        "status": "SUCCESS",
+        "action": "synth",
+        "output_file": out_path,
+        "sample_count": len(samples),
+        "domain": domain,
+        "format": "ChatML JSONL",
+        "file_size_bytes": os.path.getsize(out_path)
+    }
+    print(json.dumps(res, indent=2))
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No action specified"}))
@@ -90,6 +142,8 @@ def main():
         handle_data_inspect(args)
     elif action == "train":
         handle_train(args)
+    elif action == "synth":
+        handle_synth(args)
     else:
         print(json.dumps({"status": "SUCCESS", "action": action, "info": "Synapse Soup tool executed"}))
 

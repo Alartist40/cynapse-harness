@@ -76,6 +76,23 @@ impl ForensicStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanHistoryEntry {
+    pub timestamp: String,
+    pub total_artifacts_scanned: usize,
+    pub findings_count: usize,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForensicScanDiff {
+    pub previous_artifacts: usize,
+    pub artifact_delta: i64,
+    pub previous_findings: usize,
+    pub findings_delta: i64,
+    pub last_scan_timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForensicScanReport {
     pub platform: String,
     pub hardware: String,
@@ -88,6 +105,7 @@ pub struct ForensicScanReport {
     pub status: ForensicStatus,
     pub zero_network_guarantee: bool,
     pub scan_duration_ms: u64,
+    pub history_diff: Option<ForensicScanDiff>,
 }
 
 impl ForensicScanReport {
@@ -101,6 +119,10 @@ impl ForensicScanReport {
         lines.push(format!("Status: {} | Doctrine D2 Zero-Network: Guaranteed", self.status.badge()));
         lines.push(format!("Platform: {} | Hardware: {}", self.platform, self.hardware));
         lines.push(format!("Scanned Artifacts: {} | Loaded IOCs: {} | Duration: {}ms", self.total_artifacts_scanned, self.iocs_loaded, self.scan_duration_ms));
+        if let Some(diff) = &self.history_diff {
+            let sign = if diff.artifact_delta >= 0 { "+" } else { "" };
+            lines.push(format!("History Delta: {}{} artifacts since last scan ({})", sign, diff.artifact_delta, diff.last_scan_timestamp));
+        }
         
         if self.findings.is_empty() {
             lines.push(format!("Findings: 0 indicators matched. (No known Candiru/AdFection IOCs found in readable artifacts)"));
@@ -687,10 +709,47 @@ pub fn run_forensic_scan(deep: bool) -> ForensicScanReport {
         ForensicStatus::Clean
     };
 
+    let history_file = Path::new("data/scan_history.json");
+    let mut history_diff = None;
+    if let Ok(content) = fs::read_to_string(history_file) {
+        if let Ok(entries) = serde_json::from_str::<Vec<ScanHistoryEntry>>(&content) {
+            if let Some(last) = entries.last() {
+                history_diff = Some(ForensicScanDiff {
+                    previous_artifacts: last.total_artifacts_scanned,
+                    artifact_delta: total_artifacts as i64 - last.total_artifacts_scanned as i64,
+                    previous_findings: last.findings_count,
+                    findings_delta: findings.len() as i64 - last.findings_count as i64,
+                    last_scan_timestamp: last.timestamp.clone(),
+                });
+            }
+        }
+    }
+
+    let current_timestamp = chrono_now_iso();
+    let new_entry = ScanHistoryEntry {
+        timestamp: current_timestamp.clone(),
+        total_artifacts_scanned: total_artifacts,
+        findings_count: findings.len(),
+        mode: if deep { "DEEP".into() } else { "QUICK".into() },
+    };
+
+    let mut entries = if let Ok(content) = fs::read_to_string(history_file) {
+        serde_json::from_str::<Vec<ScanHistoryEntry>>(&content).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    entries.push(new_entry);
+    if let Some(parent) = history_file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&entries) {
+        let _ = fs::write(history_file, json);
+    }
+
     ForensicScanReport {
         platform,
         hardware,
-        scan_timestamp: chrono_now_iso(),
+        scan_timestamp: current_timestamp,
         total_artifacts_scanned: total_artifacts,
         iocs_loaded: iocs.len(),
         findings,
@@ -699,12 +758,40 @@ pub fn run_forensic_scan(deep: bool) -> ForensicScanReport {
         status,
         zero_network_guarantee: true,
         scan_duration_ms: duration,
+        history_diff,
     }
 }
 
 /// Returns the embedded threat indicators list for interactive inspection.
 pub fn get_embedded_iocs() -> Vec<Indicator> {
     parse_iocs(EMBEDDED_IOCS)
+}
+
+/// Filters threat indicators by substring query and category index.
+/// category: 0 = All, 1 = Domains, 2 = IPs, 3 = Hashes
+pub fn filter_iocs(iocs: &[Indicator], filter_query: &str, category: usize) -> Vec<Indicator> {
+    let q = filter_query.trim().to_lowercase();
+    iocs.iter()
+        .filter(|ioc| {
+            let cat_match = match category {
+                1 => ioc.ind_type == IndicatorType::Domain,
+                2 => ioc.ind_type == IndicatorType::Ip,
+                3 => ioc.ind_type == IndicatorType::Sha256,
+                _ => true,
+            };
+            if !cat_match {
+                return false;
+            }
+            if q.is_empty() {
+                return true;
+            }
+            ioc.value.to_lowercase().contains(&q)
+                || ioc.tier.to_lowercase().contains(&q)
+                || ioc.source.to_lowercase().contains(&q)
+                || ioc.confidence.to_lowercase().contains(&q)
+        })
+        .cloned()
+        .collect()
 }
 
 fn chrono_now_iso() -> String {
@@ -737,6 +824,22 @@ mod tests {
         assert!(!matches_domain_boundary("notfearevolve.com", "fearevolve.com"));
         assert!(!matches_domain_boundary("fearevolve.computer", "fearevolve.com"));
         assert!(!matches_domain_boundary("fearevolve.com.attacker.com", "fearevolve.com"));
+    }
+
+    #[test]
+    fn test_filter_iocs_filtering() {
+        let iocs = parse_iocs(EMBEDDED_IOCS);
+        let domains = filter_iocs(&iocs, "", 1);
+        assert!(!domains.is_empty());
+        assert!(domains.iter().all(|i| i.ind_type == IndicatorType::Domain));
+
+        let fearevolve = filter_iocs(&iocs, "fearevolve", 0);
+        assert!(!fearevolve.is_empty());
+        assert!(fearevolve[0].value.contains("fearevolve"));
+
+        let ips = filter_iocs(&iocs, "", 2);
+        assert!(!ips.is_empty());
+        assert!(ips.iter().all(|i| i.ind_type == IndicatorType::Ip));
     }
 
     #[test]
