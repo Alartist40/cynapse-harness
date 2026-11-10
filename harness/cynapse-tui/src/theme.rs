@@ -277,18 +277,18 @@ impl AppTheme {
         }
     }
 
-    // Secondary / Dim Text (Visible, readable slate gray — never black)
+    // Secondary / Dim Text (High contrast, crisp & readable on all terminals)
     pub fn dim_text(&self) -> Style {
         match self {
-            AppTheme::DarkSlate => Style::default().fg(Color::Rgb(145, 150, 170)),
-            AppTheme::Cyberpunk => Style::default().fg(Color::Rgb(165, 145, 185)),
-            AppTheme::AmberCRT => Style::default().fg(Color::Rgb(185, 145, 60)),
-            AppTheme::EmeraldMatrix => Style::default().fg(Color::Rgb(110, 170, 120)),
-            AppTheme::VioletSynth => Style::default().fg(Color::Rgb(110, 115, 148)),
-            AppTheme::Nord => Style::default().fg(Color::Rgb(120, 130, 150)),
-            AppTheme::Gruvbox => Style::default().fg(Color::Rgb(146, 131, 116)),
-            AppTheme::Catppuccin => Style::default().fg(Color::Rgb(127, 132, 156)),
-            AppTheme::OledBlack => Style::default().fg(Color::Rgb(110, 110, 110)),
+            AppTheme::DarkSlate => Style::default().fg(Color::Rgb(180, 195, 215)),
+            AppTheme::Cyberpunk => Style::default().fg(Color::Rgb(215, 195, 235)),
+            AppTheme::AmberCRT => Style::default().fg(Color::Rgb(240, 195, 110)),
+            AppTheme::EmeraldMatrix => Style::default().fg(Color::Rgb(165, 230, 175)),
+            AppTheme::VioletSynth => Style::default().fg(Color::Rgb(180, 185, 220)),
+            AppTheme::Nord => Style::default().fg(Color::Rgb(185, 195, 215)),
+            AppTheme::Gruvbox => Style::default().fg(Color::Rgb(215, 195, 165)),
+            AppTheme::Catppuccin => Style::default().fg(Color::Rgb(195, 200, 225)),
+            AppTheme::OledBlack => Style::default().fg(Color::Rgb(200, 200, 200)),
         }
     }
 

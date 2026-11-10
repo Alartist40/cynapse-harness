@@ -50,6 +50,14 @@ pub struct ForensicCoverageGap {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InspectedTarget {
+    pub category: String,
+    pub target: String,
+    pub items_checked: usize,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ForensicStatus {
     Clean,
@@ -60,9 +68,9 @@ pub enum ForensicStatus {
 impl ForensicStatus {
     pub fn badge(&self) -> &'static str {
         match self {
-            ForensicStatus::Clean => "✓ CLEAN",
-            ForensicStatus::ThreatDetected => "🚨 THREAT DETECTED",
-            ForensicStatus::GapsOnly => "⚠️ GAPS NOTED",
+            ForensicStatus::Clean => "[✓ CLEAN]",
+            ForensicStatus::ThreatDetected => "[! THREAT DETECTED]",
+            ForensicStatus::GapsOnly => "[? GAPS NOTED]",
         }
     }
 }
@@ -76,6 +84,7 @@ pub struct ForensicScanReport {
     pub iocs_loaded: usize,
     pub findings: Vec<ForensicFinding>,
     pub gaps: Vec<ForensicCoverageGap>,
+    pub inspected_targets: Vec<InspectedTarget>,
     pub status: ForensicStatus,
     pub zero_network_guarantee: bool,
     pub scan_duration_ms: u64,
@@ -88,7 +97,7 @@ impl ForensicScanReport {
 
     pub fn to_summary(&self) -> String {
         let mut lines = Vec::new();
-        lines.push(format!("🛡️ ZERO-BREACH DIGITAL FORENSICS REPORT"));
+        lines.push(format!("[ ZERO-BREACH DIGITAL FORENSICS REPORT ]"));
         lines.push(format!("Status: {} | Doctrine D2 Zero-Network: Guaranteed", self.status.badge()));
         lines.push(format!("Platform: {} | Hardware: {}", self.platform, self.hardware));
         lines.push(format!("Scanned Artifacts: {} | Loaded IOCs: {} | Duration: {}ms", self.total_artifacts_scanned, self.iocs_loaded, self.scan_duration_ms));
@@ -96,7 +105,7 @@ impl ForensicScanReport {
         if self.findings.is_empty() {
             lines.push(format!("Findings: 0 indicators matched. (No known Candiru/AdFection IOCs found in readable artifacts)"));
         } else {
-            lines.push(format!("🚨 CRITICAL: {} INDICATOR(S) MATCHED:", self.findings.len()));
+            lines.push(format!("[!] CRITICAL: {} INDICATOR(S) MATCHED:", self.findings.len()));
             for f in &self.findings {
                 lines.push(format!("  • [{}] {} (Tier: {}, Conf: {})", f.indicator_type, f.indicator, f.tier, f.confidence));
                 lines.push(format!("    Artifact: {}", f.artifact_path));
@@ -542,6 +551,7 @@ pub fn run_forensic_scan(deep: bool) -> ForensicScanReport {
     let iocs = parse_iocs(&raw_iocs);
     let mut findings = Vec::new();
     let mut gaps = Vec::new();
+    let mut inspected_targets = Vec::new();
     let mut total_artifacts = 0;
 
     // 1. Browser Profiles (Chromium & Firefox)
@@ -583,7 +593,15 @@ pub fn run_forensic_scan(deep: bool) -> ForensicScanReport {
                 } else {
                     "SELECT host_key FROM cookies LIMIT 50000"
                 };
-                total_artifacts += scan_sqlite_history(&b_name, &db, query, &iocs, &mut findings, &mut gaps);
+                let before = findings.len();
+                let count = scan_sqlite_history(&b_name, &db, query, &iocs, &mut findings, &mut gaps);
+                total_artifacts += count;
+                inspected_targets.push(InspectedTarget {
+                    category: if is_history { "Browser History".into() } else { "Browser Cookies".into() },
+                    target: format!("{} ({})", db.display(), b_name),
+                    items_checked: count,
+                    status: if findings.len() > before { "[! COMPROMISE]" } else { "[✓ CLEAN]" }.into(),
+                });
             }
         }
 
@@ -595,7 +613,8 @@ pub fn run_forensic_scan(deep: bool) -> ForensicScanReport {
                     if profile_dir.is_dir() {
                         let places = profile_dir.join("places.sqlite");
                         if places.exists() {
-                            total_artifacts += scan_sqlite_history(
+                            let before = findings.len();
+                            let count = scan_sqlite_history(
                                 "Mozilla Firefox",
                                 &places,
                                 "SELECT url FROM moz_places LIMIT 50000",
@@ -603,10 +622,18 @@ pub fn run_forensic_scan(deep: bool) -> ForensicScanReport {
                                 &mut findings,
                                 &mut gaps,
                             );
+                            total_artifacts += count;
+                            inspected_targets.push(InspectedTarget {
+                                category: "Firefox Places".into(),
+                                target: places.display().to_string(),
+                                items_checked: count,
+                                status: if findings.len() > before { "[! COMPROMISE]" } else { "[✓ CLEAN]" }.into(),
+                            });
                         }
                         let cookies = profile_dir.join("cookies.sqlite");
                         if cookies.exists() {
-                            total_artifacts += scan_sqlite_history(
+                            let before = findings.len();
+                            let count = scan_sqlite_history(
                                 "Mozilla Firefox",
                                 &cookies,
                                 "SELECT host FROM moz_cookies LIMIT 50000",
@@ -614,6 +641,13 @@ pub fn run_forensic_scan(deep: bool) -> ForensicScanReport {
                                 &mut findings,
                                 &mut gaps,
                             );
+                            total_artifacts += count;
+                            inspected_targets.push(InspectedTarget {
+                                category: "Firefox Cookies".into(),
+                                target: cookies.display().to_string(),
+                                items_checked: count,
+                                status: if findings.len() > before { "[! COMPROMISE]" } else { "[✓ CLEAN]" }.into(),
+                            });
                         }
                     }
                 }
@@ -622,10 +656,26 @@ pub fn run_forensic_scan(deep: bool) -> ForensicScanReport {
     }
 
     // 2. Host Artifacts (Hosts file & DNS configuration)
-    total_artifacts += scan_hosts_file(&iocs, &mut findings, &mut gaps);
+    let before_hosts = findings.len();
+    let hosts_count = scan_hosts_file(&iocs, &mut findings, &mut gaps);
+    total_artifacts += hosts_count;
+    inspected_targets.push(InspectedTarget {
+        category: "Host / DNS Cache".into(),
+        target: if cfg!(target_os = "windows") { r"C:\Windows\System32\drivers\etc\hosts".into() } else { "/etc/hosts".into() },
+        items_checked: hosts_count,
+        status: if findings.len() > before_hosts { "[! COMPROMISE]" } else { "[✓ CLEAN]" }.into(),
+    });
 
     // 3. File Hash Fingerprinting
-    total_artifacts += scan_file_hashes(&iocs, deep, &mut findings, &mut gaps);
+    let before_hashes = findings.len();
+    let hashes_count = scan_file_hashes(&iocs, deep, &mut findings, &mut gaps);
+    total_artifacts += hashes_count;
+    inspected_targets.push(InspectedTarget {
+        category: if deep { "Deep Staging Hashes".into() } else { "Staging Artifacts".into() },
+        target: "Downloads, Desktop, /tmp SHA-256 signatures".into(),
+        items_checked: hashes_count,
+        status: if findings.len() > before_hashes { "[! COMPROMISE]" } else { "[✓ CLEAN]" }.into(),
+    });
 
     let duration = start_time.elapsed().as_millis() as u64;
 
@@ -645,10 +695,16 @@ pub fn run_forensic_scan(deep: bool) -> ForensicScanReport {
         iocs_loaded: iocs.len(),
         findings,
         gaps,
+        inspected_targets,
         status,
         zero_network_guarantee: true,
         scan_duration_ms: duration,
     }
+}
+
+/// Returns the embedded threat indicators list for interactive inspection.
+pub fn get_embedded_iocs() -> Vec<Indicator> {
+    parse_iocs(EMBEDDED_IOCS)
 }
 
 fn chrono_now_iso() -> String {
