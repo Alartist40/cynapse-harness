@@ -4910,9 +4910,8 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     self.active_model_name.clone()
                 };
 
-                // LoRA ranks and epochs options
-                let lora_ranks = [8, 16, 32, 64];
-                let selected_rank = lora_ranks[self.soup_lora_rank_idx.min(3)];
+                // Adapter ranks and passes options
+                let _lora_ranks = [8, 16, 32, 64];
                 let epoch_options = [1, 3, 5, 10];
                 let selected_epochs = epoch_options[self.soup_epochs_idx.min(3)];
 
@@ -4979,18 +4978,20 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                 ]));
                 config_lines.push(Line::from(""));
 
-                // Field 3: LoRA Rank
+                // Field 3: Adapter Capacity (formerly LoRA Rank)
+                let rank_names = ["Light (r=8)", "Balanced (r=16)", "Deep (r=32)", "Max (r=64)"];
+                let rank_name = rank_names[self.soup_lora_rank_idx.min(3)];
                 config_lines.push(Line::from(vec![
-                    Span::styled(if self.soup_field_idx == 3 { " > [4] LoRA Rank:  " } else { "   [4] LoRA Rank:  " }, f_style(3)),
-                    Span::styled(format!(" r={} (Alpha={}) ", selected_rank, selected_rank * 2), if self.soup_field_idx == 3 { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) }),
-                    Span::styled(" [8/16/32/64]", t.dim_text()),
+                    Span::styled(if self.soup_field_idx == 3 { " > [4] Capacity:   " } else { "   [4] Capacity:   " }, f_style(3)),
+                    Span::styled(format!(" {} ", rank_name), if self.soup_field_idx == 3 { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) }),
+                    Span::styled(" [Space: cycle]", t.dim_text()),
                 ]));
                 config_lines.push(Line::from(""));
 
-                // Field 4: Epochs
+                // Field 4: Learning Passes (formerly Epochs)
                 config_lines.push(Line::from(vec![
-                    Span::styled(if self.soup_field_idx == 4 { " > [5] Epochs:     " } else { "   [5] Epochs:     " }, f_style(4)),
-                    Span::styled(format!(" {} Passes ", selected_epochs), if self.soup_field_idx == 4 { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) }),
+                    Span::styled(if self.soup_field_idx == 4 { " > [5] Passes:     " } else { "   [5] Passes:     " }, f_style(4)),
+                    Span::styled(format!(" {} Learning Rounds ", selected_epochs), if self.soup_field_idx == 4 { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) }),
                     Span::styled(" [1/3/5/10]", t.dim_text()),
                 ]));
                 config_lines.push(Line::from(""));
