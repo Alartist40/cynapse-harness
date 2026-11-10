@@ -5,10 +5,10 @@ set -e
 # 🧠 CYNAPSE - Single-Line Pure Rust Installer & Hardware Auto-Detector
 # ==============================================================================
 # Single Line Install Command:
-#   curl -fsSL https://raw.githubusercontent.com/Alartist40/cynapse/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Alartist40/cynapse-harness/main/install.sh | bash
 # ==============================================================================
 
-REPO_URL="https://github.com/Alartist40/cynapse.git"
+REPO_URL="https://github.com/Alartist40/cynapse-harness.git"
 INSTALL_ROOT="${HOME}/.cynapse"
 BIN_DIR="${HOME}/.local/bin"
 
@@ -98,55 +98,35 @@ else
     . "${HOME}/.cargo/env"
 fi
 
-# 4b. Inference Backend Check (Tier 1 endpoint needs a live local backend)
+# 4b. Inference Engine Architecture Check
 echo ""
-echo "🤖 Inference Backend Check:"
+echo "🤖 Inference Engine Architecture Check:"
+echo "   [✓] Embedded Sovereign Leafcutter Engine: Pure safe Rust (AVX2/NEON SIMD + zero-clone layer streaming)."
+echo "       No external server or daemon required to run local models."
 
 HAVE_BACKEND=""
-if command -v ollama >/dev/null 2>&1; then
-    HAVE_BACKEND="ollama"
-    echo "   [✓] Ollama found: $(command -v ollama)"
-elif command -v llama-server >/dev/null 2>&1; then
+if command -v llama-server >/dev/null 2>&1; then
     HAVE_BACKEND="llama-server"
-    echo "   [✓] llama-server found: $(command -v llama-server)"
-fi
-
-if [ -z "${HAVE_BACKEND}" ]; then
-    echo "   [!] No inference backend detected on PATH."
-    if [ -t 0 ]; then
-        printf "Install Ollama now? [y/N] "
-        read -r BACKEND_REPLY || BACKEND_REPLY=""
-        case "${BACKEND_REPLY}" in
-            y|Y|yes|YES)
-                if command -v curl >/dev/null 2>&1; then
-                    if curl -fsSL https://ollama.com/install.sh | sh; then
-                        echo "   [✓] Ollama installation finished."
-                    else
-                        echo "   [!] Ollama installation failed. Install manually: https://ollama.com/download"
-                    fi
-                else
-                    echo "   [!] curl not found; cannot install Ollama automatically."
-                    echo "       Install manually: https://ollama.com/download"
-                fi
-                ;;
-            *)
-                echo "   [!] Skipping Ollama installation (user declined)."
-                echo "       Install Ollama from https://ollama.com/download"
-                echo "       or build llama-server (llama.cpp) and ensure it is on PATH."
-                ;;
-        esac
-    else
-        echo "   [!] Non-interactive install (stdin is not a TTY) - skipping backend install."
-        echo "       Install Ollama from https://ollama.com/download"
-        echo "       or build llama-server (llama.cpp) and ensure it is on PATH."
-    fi
+    echo "   [✓] Optional Hardware Accelerator found: $(command -v llama-server) (Vulkan/Metal/CUDA support)"
+elif command -v ollama >/dev/null 2>&1; then
+    HAVE_BACKEND="ollama"
+    echo "   [✓] Optional Fallback Provider found: $(command -v ollama)"
+else
+    echo "   [i] Standalone in-process Leafcutter active (100% offline, zero external dependencies)."
 fi
 
 # 5. Build Standalone Pure Rust Cynapse Release Binary
 echo ""
 echo "⚙️ Building Standalone Pure Rust Cynapse Binary (cargo build --release)..."
 
-mkdir -p "${CYNAPSE_DIR}/models" "${CYNAPSE_DIR}/data" "${BIN_DIR}" "${HOME}/.cynapse/models" "${HOME}/.cynapse/persona"
+mkdir -p "${CYNAPSE_DIR}/models" "${CYNAPSE_DIR}/data" "${BIN_DIR}" "${INSTALL_ROOT}/models" "${INSTALL_ROOT}/persona" "${INSTALL_ROOT}/synapses"
+
+# Seed built-in Synapse extension packs
+if [ -d "${CYNAPSE_DIR}/synapses" ]; then
+    echo "   [→] Seeding Synapse tool extension packs (zero_breach, soup)..."
+    cp -rn "${CYNAPSE_DIR}/synapses/"* "${INSTALL_ROOT}/synapses/" 2>/dev/null || true
+fi
+
 (cd "${CYNAPSE_DIR}" && cargo build --release)
 
 # 6. Install Release Executable into User PATH

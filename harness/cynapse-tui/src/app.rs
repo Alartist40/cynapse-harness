@@ -65,6 +65,7 @@ pub enum ActiveModal {
     CommandPalette,
     Doctor,
     SecurityForensics,
+    SynapseManager,
     PersonaManager,
     Bots,
     ToolApproval,
@@ -373,10 +374,11 @@ pub struct TuiApp {
     pub speculative_total_drafts: usize,
     pub current_streaming_layer: Option<(usize, usize)>,
 
-    // Zero-Breach Digital Forensics
+    // Zero-Breach Digital Forensics & Synapse Extension Hub
     pub security_report: Option<cynapse_core::forensics::ForensicScanReport>,
     pub security_scanning: bool,
     pub security_deep_mode: bool,
+    pub selected_synapse_idx: usize,
 }
 
 impl TuiApp {
@@ -510,6 +512,7 @@ impl TuiApp {
             security_report: None,
             security_scanning: false,
             security_deep_mode: false,
+            selected_synapse_idx: 0,
         }
     }
 
@@ -1603,11 +1606,16 @@ impl TuiApp {
                                     ActiveModal::Bots => {
                                         self.selected_bot_idx = self.selected_bot_idx.saturating_sub(1);
                                     }
+                                    ActiveModal::SynapseManager => {
+                                        if self.selected_synapse_idx > 0 {
+                                            self.selected_synapse_idx -= 1;
+                                        }
+                                    }
                                     ActiveModal::CommandPalette => {
                                         if self.palette_selected_idx > 0 {
                                             self.palette_selected_idx -= 1;
                                         } else {
-                                            self.palette_selected_idx = 14;
+                                            self.palette_selected_idx = 15;
                                         }
                                     }
                                     _ => {}
@@ -1639,8 +1647,15 @@ impl TuiApp {
                                     ActiveModal::Bots => {
                                         self.selected_bot_idx = self.selected_bot_idx.saturating_add(1);
                                     }
+                                    ActiveModal::SynapseManager => {
+                                        let reg = cynapse_core::synapse::SynapseRegistry::global();
+                                        let count = reg.list_synapses().len();
+                                        if count > 0 && self.selected_synapse_idx + 1 < count {
+                                            self.selected_synapse_idx += 1;
+                                        }
+                                    }
                                     ActiveModal::CommandPalette => {
-                                        self.palette_selected_idx = (self.palette_selected_idx + 1) % 15;
+                                        self.palette_selected_idx = (self.palette_selected_idx + 1) % 16;
                                     }
                                     _ => {}
                                 },
@@ -1684,6 +1699,16 @@ impl TuiApp {
                                     _ => {}
                                 },
                                 KeyCode::Char('s') | KeyCode::Char(' ') => match self.modal {
+                                    ActiveModal::SynapseManager => {
+                                        let reg = cynapse_core::synapse::SynapseRegistry::global();
+                                        let synapses = reg.list_synapses();
+                                        if !synapses.is_empty() {
+                                            let idx = self.selected_synapse_idx.min(synapses.len() - 1);
+                                            let syn = &synapses[idx];
+                                            let current = syn.enabled.unwrap_or(true);
+                                            let _ = reg.set_enabled(&syn.name, !current);
+                                        }
+                                    }
                                     ActiveModal::MemoryGraph => {
                                         self.galaxy_auto_spin = !self.galaxy_auto_spin;
                                     }
@@ -1828,14 +1853,37 @@ impl TuiApp {
                                     ActiveModal::Bots => {
                                         self.modal = ActiveModal::None;
                                     }
+                                    ActiveModal::SynapseManager => {
+                                        let reg = cynapse_core::synapse::SynapseRegistry::global();
+                                        let synapses = reg.list_synapses();
+                                        if !synapses.is_empty() {
+                                            let idx = self.selected_synapse_idx.min(synapses.len() - 1);
+                                            let syn = &synapses[idx];
+                                            if syn.name == "zero_breach" {
+                                                if self.security_report.is_none() {
+                                                    self.security_report = Some(cynapse_core::forensics::run_forensic_scan(self.security_deep_mode));
+                                                }
+                                                self.modal = ActiveModal::SecurityForensics;
+                                            } else {
+                                                let current = syn.enabled.unwrap_or(true);
+                                                let _ = reg.set_enabled(&syn.name, !current);
+                                            }
+                                        }
+                                    }
                                     ActiveModal::CommandPalette => {
                                         const PALETTE_COMMANDS: &[&str] = &[
-                                            "/help", "/dendrite", "/theme", "/model", "/session", "/doctor", "/security",
+                                            "/help", "/dendrite", "/theme", "/model", "/session", "/doctor", "/security", "/synapse",
                                             "/spec", "/rewind", "/fork", "/bots", "/persona", "/undo", "/clear", "/exit"
                                         ];
                                         let sel = PALETTE_COMMANDS[self.palette_selected_idx.min(PALETTE_COMMANDS.len() - 1)];
                                         self.modal = ActiveModal::None;
                                         match sel {
+                                            "/synapse" => {
+                                                let reg = cynapse_core::synapse::SynapseRegistry::global();
+                                                reg.reload();
+                                                self.selected_synapse_idx = 0;
+                                                self.modal = ActiveModal::SynapseManager;
+                                            }
                                             "/security" => {
                                                 if self.security_report.is_none() {
                                                     self.security_report = Some(cynapse_core::forensics::run_forensic_scan(self.security_deep_mode));
@@ -2777,12 +2825,18 @@ impl TuiApp {
                                     continue;
                                 }
 
-                                if trimmed == "/synapse" || trimmed.starts_with("/synapse ") {
+                                if trimmed == "/synapse" || trimmed.starts_with("/synapse ") || trimmed == "/extensions" {
                                     let reg = cynapse_core::synapse::SynapseRegistry::global();
                                     reg.reload();
                                     let subcmd = trimmed.strip_prefix("/synapse").unwrap_or("").trim();
 
-                                    if subcmd.is_empty() || subcmd == "list" {
+                                    if subcmd.is_empty() {
+                                        self.selected_synapse_idx = 0;
+                                        self.modal = ActiveModal::SynapseManager;
+                                        continue;
+                                    }
+
+                                    if subcmd == "list" {
                                         let list = reg.list_synapses();
                                         if list.is_empty() {
                                             self.messages.push(ChatMessage {
@@ -4319,6 +4373,69 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Zero-Breach Digital Forensics Dashboard ").border_style(t.active_border_style()));
                 f.render_widget(modal, area);
             }
+            ActiveModal::SynapseManager => {
+                let area = centered_rect(85, 75, f.area());
+                f.render_widget(Clear, area);
+
+                let reg = cynapse_core::synapse::SynapseRegistry::global();
+                let synapses = reg.list_synapses();
+
+                let mut lines = Vec::new();
+                lines.push(Line::from(vec![
+                    Span::styled("🔌 CYNAPSE SYNAPSE EXTENSION HUB", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::raw("  │  "),
+                    Span::styled(format!("{} Installed Packs", synapses.len()), Style::default().fg(Color::Yellow)),
+                ]));
+                lines.push(Line::from("──────────────────────────────────────────────────────────────────────────────"));
+
+                if synapses.is_empty() {
+                    lines.push(Line::from(" No dynamic Synapse extensions installed in ~/.cynapse/synapses/ or ./synapses"));
+                } else {
+                    for (idx, syn) in synapses.iter().enumerate() {
+                        let is_cursor = idx == self.selected_synapse_idx;
+                        let prefix = if is_cursor { "▶ " } else { "  " };
+                        let enabled = syn.enabled.unwrap_or(true);
+                        let status_badge = if enabled { "🟢 ACTIVE" } else { "⚪ DISABLED" };
+                        let status_style = if enabled { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) };
+                        let header_style = if is_cursor { t.highlight_item() } else { Style::default().fg(Color::White) };
+
+                        lines.push(Line::from(vec![
+                            Span::styled(prefix, header_style),
+                            Span::styled(format!("{:<16} ", syn.name), header_style.add_modifier(Modifier::BOLD)),
+                            Span::styled(format!("(v{}) ", syn.version), t.dim_text()),
+                            Span::styled(format!("— {} ", syn.title), Style::default().fg(Color::LightCyan)),
+                            Span::styled(format!("[{}]", status_badge), status_style),
+                        ]));
+
+                        lines.push(Line::from(Span::styled(format!("    {}", syn.description), Style::default().fg(Color::Gray))));
+
+                        let tool_names = syn.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ");
+                        let tools_display = if tool_names.is_empty() { "None".to_string() } else { tool_names };
+                        lines.push(Line::from(vec![
+                            Span::styled("    Exposed Tools: ", t.dim_text()),
+                            Span::styled(tools_display, Style::default().fg(Color::Yellow)),
+                        ]));
+                        lines.push(Line::from(""));
+                    }
+                }
+
+                lines.push(Line::from("──────────────────────────────────────────────────────────────────────────────"));
+                lines.push(Line::from(vec![
+                    Span::styled("[Up/Down]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::raw(" Select  │  "),
+                    Span::styled("[Space]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::raw(" Toggle Active  │  "),
+                    Span::styled("[Enter]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    Span::raw(" Launch Tool Dashboard  │  "),
+                    Span::styled("[Esc]", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                    Span::raw(" Close"),
+                ]));
+
+                let modal = Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Synapse Extension Hub ").border_style(t.active_border_style()));
+                f.render_widget(modal, area);
+            }
             ActiveModal::MemoryGraph => {
                 // Handled in primary viewport canvas
             }
@@ -4479,6 +4596,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     ("/session", "Saved conversation sessions"),
                     ("/doctor", "System self-healing diagnostics"),
                     ("/security", "Zero-Breach digital forensics threat scanner"),
+                    ("/synapse", "Synapse modular tool extension hub"),
                     ("/spec", "Toggle n-gram speculative prompt lookup"),
                     ("/rewind", "Rewind last conversational turn"),
                     ("/fork", "Branch session into new fork"),

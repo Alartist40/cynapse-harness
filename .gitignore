@@ -10,3 +10,12 @@
 .agents/skills/unlazy/
 /bin/
 /lib/
+
+# Personal & internal technical planning documents
+*.pdf
+cynapse-presentation.md
+PLAN.md
+IMPLEMENT.md
+GATES.md
+AGENTS.md
+
