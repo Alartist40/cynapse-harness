@@ -1329,10 +1329,13 @@ pub async fn try_llama_server_stream(
     on_token: impl FnMut(TokenType, &str),
 ) -> Result<ExecutionStats> {
     let daemon_port = daemon::DEFAULT_DAEMON_PORT;
-    let daemon_ready = if daemon::LlamaServerDaemon::is_healthy(daemon_port) {
-        true
-    } else if let Some(local_path) = find_model_file_path(model_name) {
-        daemon::LlamaServerDaemon::get_or_spawn_daemon(&local_path, daemon_port)
+    let local_model_path = find_model_file_path(model_name);
+    let daemon_ready = if let Some(ref local_path) = local_model_path {
+        if daemon::LlamaServerDaemon::is_healthy(daemon_port) {
+            true
+        } else {
+            daemon::LlamaServerDaemon::get_or_spawn_daemon(local_path, daemon_port)
+        }
     } else {
         false
     };

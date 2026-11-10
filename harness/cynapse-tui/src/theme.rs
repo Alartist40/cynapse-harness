@@ -247,6 +247,36 @@ impl AppTheme {
         }
     }
 
+    /// Solid background color for modal dialogs to prevent transparent terminal bleeding
+    pub fn modal_bg(&self) -> Color {
+        match self {
+            AppTheme::DarkSlate => Color::Rgb(15, 18, 26),
+            AppTheme::Cyberpunk => Color::Rgb(20, 10, 25),
+            AppTheme::AmberCRT => Color::Rgb(18, 14, 5),
+            AppTheme::EmeraldMatrix => Color::Rgb(5, 20, 10),
+            AppTheme::VioletSynth => Color::Rgb(26, 27, 38),
+            AppTheme::Nord => Color::Rgb(46, 52, 64),
+            AppTheme::Gruvbox => Color::Rgb(40, 40, 40),
+            AppTheme::Catppuccin => Color::Rgb(30, 30, 46),
+            AppTheme::OledBlack => Color::Rgb(10, 10, 10),
+        }
+    }
+
+    /// Solid elevated card surface background color for inner dashboard panels
+    pub fn card_bg(&self) -> Color {
+        match self {
+            AppTheme::DarkSlate => Color::Rgb(22, 27, 38),
+            AppTheme::Cyberpunk => Color::Rgb(32, 16, 42),
+            AppTheme::AmberCRT => Color::Rgb(28, 22, 8),
+            AppTheme::EmeraldMatrix => Color::Rgb(8, 28, 15),
+            AppTheme::VioletSynth => Color::Rgb(36, 40, 59),
+            AppTheme::Nord => Color::Rgb(59, 66, 82),
+            AppTheme::Gruvbox => Color::Rgb(50, 48, 47),
+            AppTheme::Catppuccin => Color::Rgb(49, 50, 68),
+            AppTheme::OledBlack => Color::Rgb(20, 20, 20),
+        }
+    }
+
     // Secondary / Dim Text (Visible, readable slate gray — never black)
     pub fn dim_text(&self) -> Style {
         match self {
