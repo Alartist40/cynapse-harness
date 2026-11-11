@@ -1,6 +1,7 @@
 /target
 /cynapse
 *.gguf
+*.safetensors
 *.db
 *.db-wal
 *.db-shm
