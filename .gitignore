@@ -5,6 +5,7 @@
 *.db-wal
 *.db-shm
 /data
+harness/cynapse-core/data/
 /models/*.gguf
 /engine/leafcutter_core/rust/target
 .agents/skills/unlazy/

@@ -124,7 +124,8 @@ mkdir -p "${CYNAPSE_DIR}/models" "${CYNAPSE_DIR}/data" "${BIN_DIR}" "${INSTALL_R
 # Seed built-in Synapse extension packs
 if [ -d "${CYNAPSE_DIR}/synapses" ]; then
     echo "   [→] Seeding Synapse tool extension packs (zero_breach, soup)..."
-    cp -rn "${CYNAPSE_DIR}/synapses/"* "${INSTALL_ROOT}/synapses/" 2>/dev/null || true
+    mkdir -p "${INSTALL_ROOT}/synapses"
+    cp -r "${CYNAPSE_DIR}/synapses/"* "${INSTALL_ROOT}/synapses/" 2>/dev/null || true
 fi
 
 (cd "${CYNAPSE_DIR}" && cargo build --release)
@@ -163,7 +164,8 @@ fi
 echo ""
 echo "Quick Start Commands:"
 echo "  1. Start Interactive Cynapse TUI: cynapse"
-echo "  2. Download Hardware Model:       cynapse pull"
-echo "  3. Run Self-Healing Doctor:       cynapse doctor"
-echo "  4. View 3D Memory Atlas:         cynapse memory"
+echo "  2. Air-Gapped Forensics Audit:    cynapse run '/security'"
+echo "  3. Low-VRAM Fine-Tuning Studio:   cynapse run '/soup'"
+echo "  4. Interactive 3D Memory Atlas:   cynapse run '/dendrite'"
+echo "  5. Run Self-Healing Doctor:       cynapse doctor"
 echo ""

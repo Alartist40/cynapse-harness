@@ -25,6 +25,7 @@ sha2 = "0.10"
 rand = "0.8"
 cynapse-engine = { path = "../../engine/cynapse-engine" }
 cynapse-memory = { path = "../../memory/cynapse-memory" }
+dendrite-3d = { path = "../../crates/dendrite-3d" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 tempfile = "3"
 

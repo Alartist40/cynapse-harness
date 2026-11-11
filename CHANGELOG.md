@@ -2,6 +2,20 @@
 
 All notable changes to Cynapse are documented here.
 
+## [Unreleased] — Sovereign Forensics & Soup Low-VRAM Post-Training Studio (2026-11-11)
+
+### Added
+- **Dendrite-3D Crate Alignment**: Renamed crate `mazzaroth` to `dendrite-3d` (`dendrite_3d` lib), fully reconciling backend engine naming with the frontend `/dendrite` user command and documentation.
+- **Forensics Interactive IOC Filter (`/`) & Category Switcher (`Tab`)**: Tab 2 in `/security` provides real-time substring filtering across 405 threat indicators, with instant category toggling (All / Domains / IPs / Hashes).
+- **Doctrine D2 DNS Leak Simulator (`p`/`s`)**: Interactive socket intercept simulation in `/security` Tab 4 demonstrating real-time NetGuard kernel traps (`EPERM`) with 0 bytes transmitted.
+- **Historical Scan Diff Tracker**: Persists scan history to `data/scan_history.json` and renders telemetry deltas in the audit dashboard.
+- **Soup Fine-Tuning Studio (`/soup`)**: Interactive low-VRAM studio featuring layer-streaming post-training ($O(L) \to O(1)$ activation memory bounding to 1,850 MB), dynamic APU RAM ceiling headroom guards, and ChatML prompt/completion schema validation.
+- **Teacher-Student Auto-Synthesizer (`g`)**: Generates 50 domain instruction-response pairs into `data/train.jsonl` via `synapses/soup/runner.py synth`.
+- **Side-by-Side Model Benchmark (`t`) & Checkpoint Gallery (`a`)**: Interactive evaluation comparing zero-shot base models against fine-tuned domain LoRA adapters, plus checkpoint gallery for inspecting models in `models/adapters/`.
+- **Live Loss Sparkline Curve**: Training Execution Monitor renders a dynamic ASCII loss curve (`2.15 [██▇▆▅▄▃▂] 0.380`).
+- **Doctor Diagnostic Expansion (25 System Checks)**: Added 3 new diagnostics for Zero-Breach Forensics, Soup Fine-Tuning Studio, and Dendrite-3D Celestial Engine.
+- **Responsive Layout & Elevated Contrast**: Adaptive `centered_rect` auto-expands to 98% on small terminal windows (width < 100 or height < 32), with elevated contrast replacing low-contrast dark grays across all dashboard panels.
+
 ## [Unreleased] — Zero-Breach Sovereign Digital Forensics & Doctrine D2 Integration (2026-11-10)
 
 ### Added

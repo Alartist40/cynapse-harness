@@ -627,6 +627,7 @@ dependencies = [
  "anyhow",
  "cynapse-engine",
  "cynapse-memory",
+ "dendrite-3d",
  "dirs 6.0.0",
  "futures-util",
  "pbkdf2",

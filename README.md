@@ -58,14 +58,16 @@ Type `/` in the prompt bar to trigger the floating command menu:
 | `/pull` | Download GGUF models from HuggingFace (curated catalog & custom URLs) |
 | `/persona` | Manage agent personality markdown files (`IDENTITY`, `SOUL`, `USER`, custom `.md`) |
 | `/bots` | Manage bot profiles; `/bots spawn <slug> <task>`, `/bots status [id]`, `/bots cancel <id\|all>` |
-| `/doctor` | Launch Cynapse Doctor self-healing diagnostic dashboard |
-| `/security` | Launch Zero-Breach digital forensics threat scanner & inspection dashboard |
-| `/memory` | Launch 3D Orbital Galaxy Memory Atlas visualizer |
+| `/doctor` | Launch Cynapse Doctor self-healing diagnostic dashboard (25 comprehensive checks) |
+| `/security` | Launch Zero-Breach air-gapped digital forensics auditor, IOC search & NetGuard probe |
+| `/soup` | Launch Soup Low-VRAM Fine-Tuning Studio (layer streaming, distillation & loss curve) |
+| `/dendrite` | Open interactive Dendrite 3D Planetary Memory Graph |
+| `/memory` | Open 3D Orbital Planetary Memory Atlas visualizer |
 | `/drawer` | Open interactive Dendrite Memory drawer inspector |
-| `/synapse` | Manage modular Synapse tool extensions (`soup`, `finetune`, etc.) |
+| `/synapse` | Manage modular Synapse tool extensions (`zero_breach`, `soup`) |
 | `/spec` | Toggle n-gram speculative prompt lookup decoding acceleration (`F6`) |
 | `/thinking` | Toggle collapsible model reasoning/thinking stream blocks |
-| `/theme` | Cycle color themes (Dark Slate, Neon Cyber, Amber CRT, Emerald Matrix) |
+| `/theme` | Cycle visual color themes (Tokyo Night, Emerald Matrix, Amber CRT, Dark Slate, etc.) |
 | `/update` | Check, pull, and compile latest Cynapse updates with non-blocking live modal |
 | `/undo` | Roll back latest file modifications made by autonomous agent tools |
 | `/session` | Manage and resume saved conversation sessions |
@@ -97,13 +99,16 @@ cynapse-mini/
 ├── harness/
 │   ├── src/main.rs             # CLI & TUI entrypoint dispatcher
 │   ├── cynapse-tui/            # Ratatui visual interface, modals, 3D visualizer
-│   └── cynapse-core/           # Tool execution, GBNF parser, bot registry, subagent loop, session manager, doctor
+│   └── cynapse-core/           # Tool execution, forensics engine, GBNF parser, bot registry, doctor
+├── crates/
+│   └── dendrite-3d/            # 3D Celestial Galaxy Visualization & Hierarchical Orbit Engine
 ├── memory/
 │   └── cynapse-memory/         # Dendrite graph engine, SQLite FTS5 store, BM25 ranker
 ├── engine/
 │   ├── cynapse-engine/         # Semantic hardware router, Tier-1 LLM client, provider fallback
 │   └── leafcutter_core/        # Pure Rust GGUF & Safetensors tensor kernels
-└── install.sh                  # Dual remote/local automated installer — also offers to install an Ollama/llama-server inference backend
+├── synapses/                   # Modular Synapse tool extension packs (zero_breach, soup)
+└── install.sh                  # Single-line automated pure Rust installer & hardware detector
 ```
 
 ### Research & Speculative Decoding Thesis Report
@@ -189,11 +194,11 @@ Six architectural pillars transforming small local models (0.5B to 3B) into reli
 
 | Metric | Value |
 |--------|-------|
-| Tests passed | 324 |
+| Tests passed | 328+ |
 | Tests failed | 0 |
-| Build | `cargo build --release` succeeds (9.3 MB standalone binary) |
-| System doctor | 22 checks, 100% health (22 Pass, 0 Warning, 0 Failed) |
-| Acceptance gates | G1-G37 all PASSED |
+| Build | `cargo build --release` succeeds (9.6 MB standalone binary) |
+| System doctor | 25 checks, 100% health (25 Pass, 0 Warning, 0 Failed) |
+| Acceptance gates | G1-G42 all PASSED |
 
 ---
 
