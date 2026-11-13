@@ -73,9 +73,11 @@ impl LlamaServerDaemon {
         let mut candidates = Vec::new();
         if let Ok(cwd) = std::env::current_dir() {
             candidates.push(cwd.join("lib").join("libggml-vulkan.so"));
+            candidates.push(cwd.join("bin").join("libggml-vulkan.so"));
         }
         if let Ok(home) = std::env::var("HOME") {
             candidates.push(PathBuf::from(&home).join(".cynapse").join("lib").join("libggml-vulkan.so"));
+            candidates.push(PathBuf::from(&home).join(".cynapse").join("bin").join("libggml-vulkan.so"));
         }
         candidates.push(PathBuf::from("/usr/local/lib/ollama/vulkan/libggml-vulkan.so"));
         candidates.push(PathBuf::from("/usr/local/lib/libggml-vulkan.so"));
@@ -135,10 +137,11 @@ impl LlamaServerDaemon {
         };
 
         let vulkan_backend = Self::find_vulkan_backend();
+        let has_dri_gpu = Path::new("/dev/dri/renderD128").exists();
         let ngl = if let Some(custom_ngl) = crate::gpu_layers() {
             custom_ngl.to_string()
-        } else if vulkan_backend.is_some() {
-            // AMD/Intel/Unified Vulkan GPU detected via libggml-vulkan.so
+        } else if vulkan_backend.is_some() || has_dri_gpu {
+            // AMD/Intel/ARM Immortalis Vulkan GPU detected
             "99".to_string()
         } else {
             match crate::detect_vram_free_mb() {
@@ -195,6 +198,7 @@ impl LlamaServerDaemon {
         ld_dirs.push("./lib".to_string());
         if let Ok(home) = std::env::var("HOME") {
             ld_dirs.push(format!("{}/.cynapse/lib", home));
+            ld_dirs.push(format!("{}/.cynapse/bin", home));
         }
         ld_dirs.push("/usr/local/lib/ollama".to_string());
         ld_dirs.push("/usr/local/lib/ollama/vulkan".to_string());
