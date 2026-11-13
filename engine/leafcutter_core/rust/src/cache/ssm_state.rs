@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct SSMStateCache {
     /// Per-layer SSM state vectors: layer_idx -> Vec<h_per_channel>
     states: HashMap<usize, Vec<f32>>,
@@ -26,6 +27,10 @@ impl SSMStateCache {
     pub fn clear(&mut self) {
         self.states.clear();
         self.conv_states.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty() && self.conv_states.is_empty()
     }
 
     /// Get the SSM state for a layer, returning zeros if not yet initialized.

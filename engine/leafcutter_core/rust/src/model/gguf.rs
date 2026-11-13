@@ -204,6 +204,11 @@ impl GGUFile {
         self.tensors.iter().find(|t| t.name == name)
     }
 
+    /// Raw read-only slice over the underlying GGUF memory map.
+    pub fn raw_mmap(&self) -> &[u8] {
+        &self.mmap
+    }
+
     /// Read and dequantize a single row from a 2D tensor.
     ///
     /// GGUF stores 2D tensors in row-major order.  For quantized types,

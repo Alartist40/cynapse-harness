@@ -422,6 +422,10 @@ pub fn total_ram_mb() -> u64 {
 }
 
 /// Identifies dedicated or integrated GPU hardware, driver, and acceleration capabilities.
+pub fn pin_rayon_to_fast_cores() {
+    leafcutter::pin_rayon_to_fast_cores();
+}
+
 pub fn detect_gpu_info() -> String {
     // 1. Query lspci for VGA/3D display controllers
     if let Ok(output) = std::process::Command::new("lspci").output() {
@@ -487,6 +491,29 @@ pub fn detect_gpu_info() -> String {
         return "NVIDIA GPU (CUDA)".to_string();
     }
 
+    // 3. SoC / ARM Vulkan & NPU detection (e.g., Orange Pi 6 Plus Mali-G720 + Zhouyi AIPU)
+    if let Ok(output) = std::process::Command::new("vulkaninfo").arg("--summary").output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("deviceName") {
+                    if let Some((_, name)) = rest.split_once('=') {
+                        let gpu_name = name.trim();
+                        if !gpu_name.is_empty() && !gpu_name.to_lowercase().contains("llvmpipe") {
+                            let npu = if Path::new("/dev/aipu").exists() { " + Zhouyi AIPU NPU" } else { "" };
+                            return format!("{} (Vulkan){}", gpu_name, npu);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if Path::new("/dev/aipu").exists() {
+        return "CIX Zhouyi AIPU NPU (/dev/aipu)".to_string();
+    }
+
     "CPU Tier (Host RAM)".to_string()
 }
 
@@ -502,7 +529,11 @@ pub struct SystemHardwareInfo {
 }
 
 pub fn probe_hardware_info() -> SystemHardwareInfo {
-    let mut cpu_brand = "x86_64 Processor".to_string();
+    let mut cpu_brand = if cfg!(target_arch = "aarch64") {
+        "ARM64 Processor".to_string()
+    } else {
+        "x86_64 Processor".to_string()
+    };
     let mut cpu_cores = 0usize;
 
     #[cfg(target_os = "linux")]

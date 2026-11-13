@@ -478,7 +478,7 @@ pub fn simd_silu(x: &[f32], out: &mut [f32]) {
 #[inline]
 pub fn simd_dot_product(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
-    let len = a.len();
+    let _len = a.len();
 
     if crate::deterministic::enabled() {
         return crate::deterministic::dot_product(a, b);

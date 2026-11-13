@@ -328,6 +328,8 @@ pub struct TuiApp {
     pub vim_mode: bool,
     pub last_ttft_ms: Option<u64>,
     pub stream_start_time: Option<std::time::Instant>,
+    pub first_token_time: Option<std::time::Instant>,
+    pub stream_token_count: usize,
     pub palette_selected_idx: usize,
     pub loop_guard: LoopGuard,
     pub agent_step_count: usize,
@@ -458,6 +460,8 @@ impl TuiApp {
             vim_mode: false,
             last_ttft_ms: None,
             stream_start_time: None,
+            first_token_time: None,
+            stream_token_count: 0,
             palette_selected_idx: 0,
             session_mgr,
             session_id,
@@ -3341,6 +3345,9 @@ impl TuiApp {
                                 self.turn_verified = true;
                                 self.is_generating = true;
                                 self.stream_start_time = Some(std::time::Instant::now());
+                                self.first_token_time = None;
+                                self.stream_token_count = 0;
+                                self.last_tok_per_sec = 0.0;
                                 self.last_ttft_ms = None;
                                 self.current_thinking_buf.clear();
                                 self.current_response_buf.clear();
@@ -3496,9 +3503,19 @@ impl TuiApp {
         for event in events {
             match event {
                 StreamEvent::Token { ttype, text } => {
+                    let now = std::time::Instant::now();
                     if let Some(st) = self.stream_start_time {
                         if self.last_ttft_ms.is_none() {
-                            self.last_ttft_ms = Some(st.elapsed().as_millis() as u64);
+                            self.last_ttft_ms = Some(now.duration_since(st).as_millis() as u64);
+                        }
+                    }
+                    self.stream_token_count += 1;
+                    if self.first_token_time.is_none() {
+                        self.first_token_time = Some(now);
+                    } else if let Some(ft) = self.first_token_time {
+                        let gen_elapsed = now.duration_since(ft).as_secs_f64();
+                        if gen_elapsed >= 0.05 {
+                            self.last_tok_per_sec = (self.stream_token_count.saturating_sub(1)) as f64 / gen_elapsed;
                         }
                     }
                     match ttype {
@@ -4104,11 +4121,13 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
         let wrapped_input_lines = (input_total_cols + input_inner_width - 1) / input_inner_width;
         let input_height = (wrapped_input_lines as u16 + 2).clamp(3, 8);
 
-        // Top Header Bar (3 lines), Middle Content (Min 5), Bottom Input (Dynamic 3..8 lines)
+        // Top Header Bar (3 lines wide, 4 lines compact), Middle Content (Min 5), Bottom Input (Dynamic 3..8 lines)
+        let screen_w = f.area().width;
+        let header_height = if screen_w < 90 { 4 } else { 3 };
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(header_height),
                 Constraint::Min(5),
                 Constraint::Length(input_height),
             ])
@@ -4132,22 +4151,89 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
 
         // 1. Top Header Bar (Jcode-style Pill Navigation & Status)
         let (_nodes, _edges) = self.graph.topology();
-        let screen_w = f.area().width;
-        let header_spans = if screen_w < 90 {
-            // Compact Header for small terminals
+        let engine_span = Span::styled(
+            if self.is_generating {
+                "● Running"
+            } else {
+                match self.active_tier {
+                    EngineTier::Tier1Fast => "○ Tier 1 Fast",
+                    EngineTier::Tier2LargeGguf => "○ Tier 2 Stream",
+                    EngineTier::Tier3LargeSafetensor => "○ Tier 3 Stream",
+                }
+            },
+            if self.is_generating {
+                Style::default().fg(Color::Yellow)
+            } else {
+                match self.active_tier {
+                    EngineTier::Tier1Fast => Style::default().fg(Color::Green),
+                    EngineTier::Tier2LargeGguf => Style::default().fg(Color::Cyan),
+                    EngineTier::Tier3LargeSafetensor => Style::default().fg(Color::Magenta),
+                }
+            },
+        );
+        let perf_span = Span::styled(
+            if self.is_generating {
+                let wave = self.render_sparkline();
+                if let Some(ttft) = self.last_ttft_ms {
+                    format!("Perf: {:.1} t/s (TTFT: {}ms) {}", self.last_tok_per_sec, ttft, wave)
+                } else {
+                    format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, wave)
+                }
+            } else if self.last_tok_per_sec > 0.0 {
+                format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, self.render_sparkline())
+            } else {
+                format!("Perf: idle {}", self.render_sparkline())
+            },
+            if self.is_generating {
+                Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Rgb(180, 160, 220))
+            },
+        );
+        let spec_span = Span::styled(
+            if self.speculative_decoding_enabled {
+                if self.speculative_total_drafts > 0 {
+                    let pct = ((self.speculative_accepted_drafts as f64 / self.speculative_total_drafts as f64) * 100.0) as u32;
+                    format!("ON ({}% draft)", pct)
+                } else {
+                    "ON (F6)".to_string()
+                }
+            } else {
+                "OFF (F6)".to_string()
+            },
+            if self.speculative_decoding_enabled {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        );
+
+        let header_lines = if screen_w < 90 {
+            // Two-line compact header preserves tok/s animation & status on small terminals
             vec![
-                Span::styled(" ◖", Style::default().fg(Color::Cyan)),
-                Span::styled("CYNAPSE", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled("◗ ", Style::default().fg(Color::Cyan)),
-                Span::styled("v0.1.0", t.dim_text()),
-                Span::styled(" │ ", t.dim_text()),
-                Span::styled(&self.active_model_name, t.active_model()),
-                Span::styled(" │ ", t.dim_text()),
-                Span::styled(format!("{:.1}G", self.hw_info.ram_used_mb as f64 / 1024.0), Style::default().fg(Color::Green)),
+                Line::from(vec![
+                    Span::styled(" ◖", Style::default().fg(Color::Cyan)),
+                    Span::styled("CYNAPSE", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled("◗ ", Style::default().fg(Color::Cyan)),
+                    Span::styled("v0.1.0", t.dim_text()),
+                    Span::styled(" │ ", t.dim_text()),
+                    Span::styled(&self.active_model_name, t.active_model()),
+                    Span::styled(" │ ", t.dim_text()),
+                    Span::styled(format!("{:.1}G", self.hw_info.ram_used_mb as f64 / 1024.0), Style::default().fg(Color::Green)),
+                ]),
+                Line::from(vec![
+                    Span::raw(" "),
+                    engine_span,
+                    Span::styled(" │ ", t.dim_text()),
+                    perf_span,
+                    Span::styled(" │ ", t.dim_text()),
+                    Span::styled("Spec: ", t.dim_text()),
+                    spec_span,
+                ]),
             ]
         } else {
             // Full Header for standard/wide terminals
-            vec![
+            vec![Line::from(vec![
                 Span::styled(" ◖", Style::default().fg(Color::Cyan)),
                 Span::styled("CYNAPSE", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                 Span::styled("◗ ", Style::default().fg(Color::Cyan)),
@@ -4158,69 +4244,16 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                 Span::styled(format!(" ({})", self.active_model_quant), Style::default().fg(Color::Green)),
                 Span::styled("  │  ", t.dim_text()),
                 Span::styled("Engine: ", t.dim_text()),
-                Span::styled(
-                    if self.is_generating {
-                        "● Running"
-                    } else {
-                        match self.active_tier {
-                            EngineTier::Tier1Fast => "○ Tier 1 Fast",
-                            EngineTier::Tier2LargeGguf => "○ Tier 2 Stream",
-                            EngineTier::Tier3LargeSafetensor => "○ Tier 3 Stream",
-                        }
-                    },
-                    if self.is_generating {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        match self.active_tier {
-                            EngineTier::Tier1Fast => Style::default().fg(Color::Green),
-                            EngineTier::Tier2LargeGguf => Style::default().fg(Color::Cyan),
-                            EngineTier::Tier3LargeSafetensor => Style::default().fg(Color::Magenta),
-                        }
-                    },
-                ),
+                engine_span,
                 Span::styled("  │  ", t.dim_text()),
-                Span::styled(
-                    if self.is_generating {
-                        let wave = self.render_sparkline();
-                        if let Some(ttft) = self.last_ttft_ms {
-                            format!("Perf: {:.1} t/s (TTFT: {}ms) {}", self.last_tok_per_sec, ttft, wave)
-                        } else {
-                            format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, wave)
-                        }
-                    } else if self.last_tok_per_sec > 0.0 {
-                        format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, self.render_sparkline())
-                    } else {
-                        format!("Perf: idle {}", self.render_sparkline())
-                    },
-                    if self.is_generating {
-                        Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Rgb(180, 160, 220))
-                    },
-                ),
+                perf_span,
                 Span::styled("  │  ", t.dim_text()),
                 Span::styled("Spec: ", t.dim_text()),
-                Span::styled(
-                    if self.speculative_decoding_enabled {
-                        if self.speculative_total_drafts > 0 {
-                            let pct = ((self.speculative_accepted_drafts as f64 / self.speculative_total_drafts as f64) * 100.0) as u32;
-                            format!("ON ({}% draft)", pct)
-                        } else {
-                            "ON (F6)".to_string()
-                        }
-                    } else {
-                        "OFF (F6)".to_string()
-                    },
-                    if self.speculative_decoding_enabled {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    },
-                ),
-            ]
+                spec_span,
+            ])]
         };
 
-        let header = Paragraph::new(vec![Line::from(header_spans)])
+        let header = Paragraph::new(header_lines)
             .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title("").border_style(t.active_border_style()));
         f.render_widget(header, main_chunks[0]);
 

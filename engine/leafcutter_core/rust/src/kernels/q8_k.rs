@@ -423,7 +423,6 @@ pub fn q6_k_dot_q8_k_neon(
     w_blocks: &[crate::kernels::q6_k::Block],
     a_blocks: &[Q8KBlock],
 ) -> f32 {
-    use crate::kernels::q6_k::Block;
     use crate::kernels::q6_k::QK_K as Q6QK;
     use std::arch::aarch64::*;
     debug_assert_eq!(w_blocks.len(), a_blocks.len());
@@ -462,7 +461,7 @@ pub fn q6_k_dot_q8_k_neon(
                 let qh1 = vld1q_u8(qh.as_ptr().add(16));
 
                 let mask0f = vdupq_n_u8(0x0F);
-                let mask03 = vdupq_n_u8(0x03);
+                let _mask03 = vdupq_n_u8(0x03);
                 let b0 = vdupq_n_u8(32);
                 let base = half * 128;
 
@@ -643,6 +642,72 @@ pub unsafe fn q4_block_dot_sdot(
     d * sumi as f32 - dmin * minc as f32
 }
 
+/// 4-row interleaved sdot Q4_K x Q8_K dot: loads each Q8_K activation block once
+/// across 4 output rows and unpacks Q4_K nibbles directly in NEON registers.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon,dotprod")]
+pub unsafe fn q4_k_dot_q8_k_sdot_4rows(
+    w_rows: [&[crate::kernels::q4_k::Block]; 4],
+    a_blocks: &[Q8KBlock],
+) -> [f32; 4] {
+    use crate::kernels::q4_k::{get_scale_min_k4, QK_K as Q4QK};
+    use std::arch::aarch64::*;
+    let nb = a_blocks.len();
+    let lo_mask = vdupq_n_u8(0x0F);
+    let mut sumf = [0.0f32; 4];
+
+    for i in 0..nb {
+        let y = &a_blocks[i];
+        let mut minc = [0i32; 4];
+        let mut sumi = [0i32; 4];
+        for r in 0..4 {
+            let w = &w_rows[r][i];
+            for g in 0..(Q4QK / 16) {
+                let (_, m) = get_scale_min_k4(g / 2, &w.scales);
+                minc[r] += y.bsums[g] as i32 * m as i32;
+            }
+        }
+        for g in 0..(Q4QK / 64) {
+            let y_l0 = vld1q_s8(y.qs[g * 64..].as_ptr());
+            let y_l1 = vld1q_s8(y.qs[g * 64 + 16..].as_ptr());
+            let y_h0 = vld1q_s8(y.qs[g * 64 + 32..].as_ptr());
+            let y_h1 = vld1q_s8(y.qs[g * 64 + 48..].as_ptr());
+            for r in 0..4 {
+                let w = &w_rows[r][i];
+                let q0 = vld1q_u8(w.qs[g * 32..].as_ptr());
+                let q1 = vld1q_u8(w.qs[g * 32 + 16..].as_ptr());
+                let mut acc_l = vdupq_n_s32(0);
+                let mut acc_h = vdupq_n_s32(0);
+                std::arch::asm!(
+                    "sdot {al:v}.4s, {q0l:v}.16b, {yl0:v}.16b",
+                    "sdot {al:v}.4s, {q1l:v}.16b, {yl1:v}.16b",
+                    "sdot {ah:v}.4s, {q0h:v}.16b, {yh0:v}.16b",
+                    "sdot {ah:v}.4s, {q1h:v}.16b, {yh1:v}.16b",
+                    al = inout(vreg) acc_l,
+                    ah = inout(vreg) acc_h,
+                    q0l = in(vreg) vreinterpretq_s8_u8(vandq_u8(q0, lo_mask)),
+                    q1l = in(vreg) vreinterpretq_s8_u8(vandq_u8(q1, lo_mask)),
+                    q0h = in(vreg) vreinterpretq_s8_u8(vshrq_n_u8(q0, 4)),
+                    q1h = in(vreg) vreinterpretq_s8_u8(vshrq_n_u8(q1, 4)),
+                    yl0 = in(vreg) y_l0,
+                    yl1 = in(vreg) y_l1,
+                    yh0 = in(vreg) y_h0,
+                    yh1 = in(vreg) y_h1,
+                    options(pure, nomem, nostack)
+                );
+                let (sc_l, _) = get_scale_min_k4(2 * g, &w.scales);
+                let (sc_h, _) = get_scale_min_k4(2 * g + 1, &w.scales);
+                sumi[r] += sc_l as i32 * vaddvq_s32(acc_l) + sc_h as i32 * vaddvq_s32(acc_h);
+            }
+        }
+        for r in 0..4 {
+            let w = &w_rows[r][i];
+            sumf[r] += (w.d * y.d) * sumi[r] as f32 - (w.dmin * y.d) * minc[r] as f32;
+        }
+    }
+    sumf
+}
+
 /// sdot-accelerated Q6_K x Q8_K dot for one output column.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon,dotprod")]
@@ -705,7 +770,6 @@ pub unsafe fn q6_block_dot_sdot(
     aux8: &[i8],
     y: &Q8KBlock,
 ) -> f32 {
-    use crate::kernels::q6_k::QK_K as Q6QK;
     use std::arch::aarch64::*;
 
     // sumi = sum over 2 halves x 8 groups of scale * dot(aux8[16], y.qs[16])
@@ -733,6 +797,28 @@ pub unsafe fn q6_block_dot_sdot(
 
     let d = w.d * y.d;
     d * sumi as f32
+}
+
+/// 4-row interleaved sdot Q6_K x Q8_K dot: keeps each Q8_K activation block hot
+/// in L1 across 4 output rows (accelerating 248K-row `lm_head` projections).
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon,dotprod")]
+pub unsafe fn q6_k_dot_q8_k_sdot_4rows(
+    w_rows: [&[crate::kernels::q6_k::Block]; 4],
+    a_blocks: &[Q8KBlock],
+) -> [f32; 4] {
+    use crate::kernels::q6_k::QK_K as Q6QK;
+    let mut sumf = [0.0f32; 4];
+    let mut aux8 = [[0i8; Q6QK]; 4];
+    for i in 0..a_blocks.len() {
+        let y = &a_blocks[i];
+        for r in 0..4 {
+            let w = &w_rows[r][i];
+            build_q6_aux8(w, &mut aux8[r]);
+            sumf[r] += q6_block_dot_sdot(w, &aux8[r], y);
+        }
+    }
+    sumf
 }
 
 /// sdot-accelerated Q4_K x Q8_K dot for **two adjacent output columns**.

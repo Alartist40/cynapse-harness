@@ -9,16 +9,21 @@
 //! `_mm256_maddubs_epi16` and is the hot GEMV path for FFN gate/up and
 //! lm_head.
 
+#[cfg(any(target_arch = "x86_64", test))]
 use super::q4_k::Block as Q4KBlock;
 use super::q4_k::Matrix as Q4KMatrix;
+#[cfg(any(target_arch = "x86_64", test))]
 use super::q6_k::Block as Q6KBlock;
 use super::q6_k::Matrix as Q6KMatrix;
 use super::q8_k::Q8KBlock;
-use super::q8_k::{quantize_row_q8_k, q4_k_dot_q8_k_scalar, q6_k_dot_q8_k_scalar, QK_K};
+#[cfg(any(not(target_arch = "aarch64"), test))]
+use super::q8_k::{q4_k_dot_q8_k_scalar, q6_k_dot_q8_k_scalar};
+use super::q8_k::{quantize_row_q8_k, QK_K};
 
 /// Shuffle index table row for Q4_K: 32 bytes alternating [2*sc, 2*sc+1, ...].
 /// Applied to a 16-lane i16 vector of scales, this broadcasts scale `sc`
 /// into every i16 lane (llama.cpp `get_scale_shuffle_k4`).
+#[cfg(target_arch = "x86_64")]
 fn get_scale_shuffle_k4(sc: usize) -> [u8; 32] {
     let mut v = [0u8; 32];
     for (i, byte) in v.iter_mut().enumerate() {
@@ -30,6 +35,7 @@ fn get_scale_shuffle_k4(sc: usize) -> [u8; 32] {
 /// Shuffle index table row for Q6_K: 16 bytes, 8 copies of [2*is, 2*is+1].
 /// Broadcasts scales[2*is] into lanes 0..7 and scales[2*is+1] into lanes
 /// 8..15 (llama.cpp `get_scale_shuffle`).
+#[cfg(target_arch = "x86_64")]
 fn get_scale_shuffle_k6(is: usize) -> [u8; 16] {
     let mut v = [0u8; 16];
     for (i, byte) in v.iter_mut().enumerate() {
@@ -234,7 +240,43 @@ fn run_q4_k_q8_gemv(a: &[f32], b: &Q4KMatrix, c: &mut [f32], k: usize, n: usize)
                 return unsafe { q4_k_gemv_col_q8_avx2(w, &a_blocks) };
             }
         }
-        q4_k_dot_q8_k_scalar(w, &a_blocks)
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            q4_k_dot_q8_k_scalar(w, &a_blocks)
+        }
+    };
+
+    let fill_range = |start: usize, out: &mut [f32]| {
+        #[cfg(target_arch = "aarch64")]
+        if std::arch::is_aarch64_feature_detected!("dotprod") {
+            let mut idx = 0;
+            while idx + 4 <= out.len() {
+                let r0 = (start + idx) * bpr;
+                let r1 = r0 + bpr;
+                let r2 = r1 + bpr;
+                let r3 = r2 + bpr;
+                let res = unsafe {
+                    crate::kernels::q8_k::q4_k_dot_q8_k_sdot_4rows(
+                        [
+                            &b.blocks[r0..r0 + bpr],
+                            &b.blocks[r1..r1 + bpr],
+                            &b.blocks[r2..r2 + bpr],
+                            &b.blocks[r3..r3 + bpr],
+                        ],
+                        &a_blocks,
+                    )
+                };
+                out[idx..idx + 4].copy_from_slice(&res);
+                idx += 4;
+            }
+            for jj in idx..out.len() {
+                out[jj] = compute(start + jj);
+            }
+            return;
+        }
+        for (jj, o) in out.iter_mut().enumerate() {
+            *o = compute(start + jj);
+        }
     };
 
     // Chunked parallelization: split the output into a few contiguous ranges
@@ -246,16 +288,11 @@ fn run_q4_k_q8_gemv(a: &[f32], b: &Q4KMatrix, c: &mut [f32], k: usize, n: usize)
         let nthreads = rayon::current_num_threads().max(1);
         let chunk = (n / (nthreads * 2)).max(1);
         c.par_chunks_mut(chunk).enumerate().for_each(|(ci, out)| {
-            let start = ci * chunk;
-            for (jj, o) in out.iter_mut().enumerate() {
-                *o = compute(start + jj);
-            }
+            fill_range(ci * chunk, out);
         });
         return;
     }
-    for j in 0..n {
-        c[j] = compute(j);
-    }
+    fill_range(0, &mut c[..n]);
 }
 
 /// Quantize `a` once, then compute every output column as an integer dot.
@@ -267,8 +304,11 @@ fn run_q6_k_q8_gemv(a: &[f32], b: &Q6KMatrix, c: &mut [f32], k: usize, n: usize)
     let compute = |j: usize| -> f32 {
         let row_base = j * bpr;
         let w = &b.blocks[row_base..row_base + bpr];
-                #[cfg(target_arch = "aarch64")]
+        #[cfg(target_arch = "aarch64")]
         {
+            if std::arch::is_aarch64_feature_detected!("dotprod") {
+                return unsafe { crate::kernels::q8_k::q6_k_dot_q8_k_sdot(w, &a_blocks) };
+            }
             return unsafe { crate::kernels::q8_k::q6_k_dot_q8_k_neon(w, &a_blocks) };
         }
         #[cfg(target_arch = "x86_64")]
@@ -277,7 +317,43 @@ fn run_q6_k_q8_gemv(a: &[f32], b: &Q6KMatrix, c: &mut [f32], k: usize, n: usize)
                 return unsafe { q6_k_gemv_col_q8_avx2(w, &a_blocks) };
             }
         }
-        q6_k_dot_q8_k_scalar(w, &a_blocks)
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            q6_k_dot_q8_k_scalar(w, &a_blocks)
+        }
+    };
+
+    let fill_range = |start: usize, out: &mut [f32]| {
+        #[cfg(target_arch = "aarch64")]
+        if std::arch::is_aarch64_feature_detected!("dotprod") {
+            let mut idx = 0;
+            while idx + 4 <= out.len() {
+                let r0 = (start + idx) * bpr;
+                let r1 = r0 + bpr;
+                let r2 = r1 + bpr;
+                let r3 = r2 + bpr;
+                let res = unsafe {
+                    crate::kernels::q8_k::q6_k_dot_q8_k_sdot_4rows(
+                        [
+                            &b.blocks[r0..r0 + bpr],
+                            &b.blocks[r1..r1 + bpr],
+                            &b.blocks[r2..r2 + bpr],
+                            &b.blocks[r3..r3 + bpr],
+                        ],
+                        &a_blocks,
+                    )
+                };
+                out[idx..idx + 4].copy_from_slice(&res);
+                idx += 4;
+            }
+            for jj in idx..out.len() {
+                out[jj] = compute(start + jj);
+            }
+            return;
+        }
+        for (jj, o) in out.iter_mut().enumerate() {
+            *o = compute(start + jj);
+        }
     };
 
     // Chunked parallelization (see `run_q4_k_q8_gemv`).
@@ -286,15 +362,10 @@ fn run_q6_k_q8_gemv(a: &[f32], b: &Q6KMatrix, c: &mut [f32], k: usize, n: usize)
         let nthreads = rayon::current_num_threads().max(1);
         let chunk = (n / (nthreads * 2)).max(1);
         c.par_chunks_mut(chunk).enumerate().for_each(|(ci, out)| {
-            let start = ci * chunk;
-            for (jj, o) in out.iter_mut().enumerate() {
-                *o = compute(start + jj);
-            }
+            fill_range(ci * chunk, out);
         });
     } else {
-        for j in 0..n {
-            c[j] = compute(j);
-        }
+        fill_range(0, &mut c[..n]);
     }
 }
 

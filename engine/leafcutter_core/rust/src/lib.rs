@@ -118,3 +118,60 @@ pub mod safetensors_loader;
 pub mod shard;
 pub mod tokenizer;
 pub mod launch;
+
+/// Pin the global Rayon thread pool to performance cores on heterogeneous
+/// big.LITTLE ARM64 SoCs (e.g. Orange Pi 6 Plus CIX Sky1: 8× Cortex-A720
+/// @ 2.2–2.6 GHz + 4× Cortex-A520 @ 1.8 GHz) so parallel GEMV barriers
+/// never stall on slow efficiency cores.
+pub fn pin_rayon_to_fast_cores() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        {
+            let mut freqs: Vec<(usize, u64)> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir("/sys/devices/system/cpu") {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let s = name.to_string_lossy();
+                    if let Some(num_str) = s.strip_prefix("cpu") {
+                        if let Ok(cpu_id) = num_str.parse::<usize>() {
+                            let freq_path = entry.path().join("cpufreq").join("cpuinfo_max_freq");
+                            if let Ok(raw) = std::fs::read_to_string(&freq_path) {
+                                if let Ok(khz) = raw.trim().parse::<u64>() {
+                                    freqs.push((cpu_id, khz));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if freqs.len() >= 6 {
+                let min_khz = freqs.iter().map(|&(_, f)| f).min().unwrap_or(0);
+                let max_khz = freqs.iter().map(|&(_, f)| f).max().unwrap_or(0);
+                if max_khz > min_khz {
+                    let mut fast_cpus: Vec<usize> = freqs
+                        .into_iter()
+                        .filter(|&(_, f)| f > min_khz)
+                        .map(|(id, _)| id)
+                        .collect();
+                    fast_cpus.sort_unstable();
+                    if fast_cpus.len() >= 4 {
+                        let cpus = fast_cpus.clone();
+                        let _ = rayon::ThreadPoolBuilder::new()
+                            .num_threads(fast_cpus.len())
+                            .start_handler(move |idx| {
+                                let cpu = cpus[idx % cpus.len()];
+                                unsafe {
+                                    let mut set: libc::cpu_set_t = std::mem::zeroed();
+                                    libc::CPU_ZERO(&mut set);
+                                    libc::CPU_SET(cpu, &mut set);
+                                    libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
+                                }
+                            })
+                            .build_global();
+                    }
+                }
+            }
+        }
+    });
+}

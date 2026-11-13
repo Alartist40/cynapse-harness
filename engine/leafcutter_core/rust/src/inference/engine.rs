@@ -57,6 +57,16 @@ fn check_context_limit(seq_len_after: usize, max_seq_len: usize) -> Result<(), S
     }
 }
 
+#[derive(Clone)]
+struct PrefixSnapshot {
+    tokens: Vec<usize>,
+    kv_cache: KVCache,
+    ssm_cache: SSMStateCache,
+    deltanet_cache: DeltaNetStateCache,
+}
+
+const MAX_PREFIX_SNAPSHOTS: usize = 2;
+
 pub struct Engine {
     pub model: GGUFModel,
     pub config: ModelConfig,
@@ -112,6 +122,8 @@ pub struct Engine {
     pub seq_offset: usize,
     /// Cached tokens matching the current sequence in kv_cache for common-prefix prompt caching.
     pub cached_prompt_tokens: Vec<usize>,
+    /// Strata-inspired KV + recurrent state prefix snapshots for O(1) multi-turn & branch reuse.
+    prefix_snapshots: Vec<PrefixSnapshot>,
     // Embedding lookup is on-demand via mmap — see embed_lookup_mmap()
     #[cfg(feature = "llama-ffi")]
     ffi_model: Option<LlamaModel>,
@@ -246,6 +258,7 @@ impl Engine {
             pages_dropped: true,
             seq_offset: 0,
             cached_prompt_tokens: Vec::new(),
+            prefix_snapshots: Vec::new(),
             #[cfg(feature = "llama-ffi")]
             ffi_model: Some(model),
             #[cfg(feature = "llama-ffi")]
@@ -463,6 +476,7 @@ impl Engine {
             pages_dropped: false,
             seq_offset: 0,
             cached_prompt_tokens: Vec::new(),
+            prefix_snapshots: Vec::new(),
             #[cfg(feature = "llama-ffi")]
             ffi_model: None,
             #[cfg(feature = "llama-ffi")]
@@ -682,7 +696,8 @@ impl Engine {
         // past the model context must refuse instead of growing forever.
         check_context_limit(tokens.len(), self.config.max_seq_len)?;
 
-        let common_prefix = if self.kv_cache.is_empty() {
+        let has_recurrent = !self.deltanet_cache.is_empty() || !self.ssm_cache.is_empty();
+        let common_prefix = if self.kv_cache.is_empty() && !has_recurrent {
             0
         } else {
             tokens
@@ -694,11 +709,34 @@ impl Engine {
 
         // Determine how many tokens can be retained from cache.
         // We must evaluate at least 1 token to compute the new logits.
-        let (keep_len, tokens_to_eval) = if common_prefix > 0 && common_prefix == tokens.len() {
-            // All tokens cached: re-evaluate last token to obtain fresh logits
+        // For DeltaNet/SSM hybrid models, recurrent matrix/conv state cannot be truncated
+        // backwards; use Strata prefix snapshots when diverging from cached_prompt_tokens.
+        let mut restored_from_snapshot = false;
+        let (keep_len, tokens_to_eval) = if common_prefix > 0
+            && common_prefix == self.cached_prompt_tokens.len()
+            && common_prefix < tokens.len()
+        {
+            (common_prefix, &tokens[common_prefix..])
+        } else if let Some(best_idx) = self
+            .prefix_snapshots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.tokens.is_empty() && s.tokens.len() < tokens.len() && tokens.starts_with(&s.tokens))
+            .max_by_key(|(_, s)| s.tokens.len())
+            .map(|(i, _)| i)
+        {
+            let snap = self.prefix_snapshots[best_idx].clone();
+            let k = snap.tokens.len();
+            self.kv_cache = snap.kv_cache;
+            self.ssm_cache = snap.ssm_cache;
+            self.deltanet_cache = snap.deltanet_cache;
+            self.cached_prompt_tokens = snap.tokens;
+            restored_from_snapshot = true;
+            (k, &tokens[k..])
+        } else if !has_recurrent && common_prefix > 0 && common_prefix == tokens.len() {
             let keep = common_prefix.saturating_sub(1);
             (keep, &tokens[keep..])
-        } else if common_prefix > 0 {
+        } else if !has_recurrent && common_prefix > 0 {
             (common_prefix, &tokens[common_prefix..])
         } else {
             self.kv_cache.clear();
@@ -707,17 +745,32 @@ impl Engine {
             (0, tokens)
         };
 
-        if keep_len > 0 {
-            self.kv_cache.truncate(keep_len);
-            self.cached_prompt_tokens.truncate(keep_len);
-        } else {
-            self.cached_prompt_tokens.clear();
+        if !restored_from_snapshot {
+            if keep_len > 0 {
+                self.kv_cache.truncate(keep_len);
+                self.cached_prompt_tokens.truncate(keep_len);
+            } else {
+                self.cached_prompt_tokens.clear();
+            }
         }
         self.seq_offset = keep_len;
 
         let logits = self.forward_native(tokens_to_eval)?;
         self.seq_offset = tokens.len();
         self.cached_prompt_tokens = tokens.to_vec();
+
+        if tokens.len() >= 16 && !self.prefix_snapshots.iter().any(|s| s.tokens == tokens) {
+            if self.prefix_snapshots.len() >= MAX_PREFIX_SNAPSHOTS {
+                // Keep index 0 (earliest/system-root snapshot) and replace the latest turn snapshot.
+                self.prefix_snapshots.remove(1);
+            }
+            self.prefix_snapshots.push(PrefixSnapshot {
+                tokens: tokens.to_vec(),
+                kv_cache: self.kv_cache.clone(),
+                ssm_cache: self.ssm_cache.clone(),
+                deltanet_cache: self.deltanet_cache.clone(),
+            });
+        }
         Ok(logits)
     }
 
@@ -1501,9 +1554,88 @@ impl Engine {
             return logits;
         }
 
+        // Fast quantized mmap path: quantize hidden_last to Q8_K once, then dot
+        // directly against mmap Q6_K/Q4_K blocks in chunked Rayon ranges (avoids
+        // 248K individual tasks and per-row f32 dequantization).
+        let file = &self.model.file;
+        if let Some(info) = file.get_tensor_info(tensor_name) {
+            if let Some(qtype) = crate::model::quant::QuantType::from_u32(info.typ) {
+                use crate::kernels::q8_k::{quantize_row_q8_k, Q8KBlock, QK_K};
+                if hidden_size % QK_K == 0 && matches!(qtype, crate::model::quant::QuantType::Q6_K | crate::model::quant::QuantType::Q4_K) {
+                    use rayon::prelude::*;
+                    let bpr = hidden_size / QK_K;
+                    let row_bytes = bpr * qtype.block_bytes();
+                    let tensor_start = (file.data_offset + info.offset) as usize;
+                    let total_needed = tensor_start + vocab_size * row_bytes;
+                    let mmap = file.raw_mmap();
+                    if total_needed <= mmap.len() {
+                        let mut a_blocks = vec![Q8KBlock::default(); bpr];
+                        quantize_row_q8_k(hidden_last, &mut a_blocks);
+                        let mut logits = vec![0.0f32; vocab_size];
+                        let nthreads = rayon::current_num_threads().max(1);
+                        let chunk = (vocab_size / (nthreads * 2)).max(1);
+
+                        #[cfg(target_arch = "aarch64")]
+                        let has_dotprod = std::arch::is_aarch64_feature_detected!("dotprod");
+
+                        logits.par_chunks_mut(chunk).enumerate().for_each(|(ci, out)| {
+                            let start_row = ci * chunk;
+                            if qtype == crate::model::quant::QuantType::Q6_K {
+                                let mut row_blocks = vec![crate::kernels::q6_k::Block {
+                                    ql: [0u8; 128], qh: [0u8; 64], scales: [0u8; 16], d: 0.0,
+                                }; bpr];
+                                for (jj, dst) in out.iter_mut().enumerate() {
+                                    let row_off = tensor_start + (start_row + jj) * row_bytes;
+                                    let raw = &mmap[row_off..row_off + row_bytes];
+                                    for b in 0..bpr {
+                                        row_blocks[b] = crate::kernels::q6_k::Block::from_bytes(&raw[b * 210..(b + 1) * 210]);
+                                    }
+                                    #[cfg(target_arch = "aarch64")]
+                                    {
+                                        *dst = if has_dotprod {
+                                            unsafe { crate::kernels::q8_k::q6_k_dot_q8_k_sdot(&row_blocks, &a_blocks) }
+                                        } else {
+                                            unsafe { crate::kernels::q8_k::q6_k_dot_q8_k_neon(&row_blocks, &a_blocks) }
+                                        };
+                                    }
+                                    #[cfg(not(target_arch = "aarch64"))]
+                                    {
+                                        *dst = crate::kernels::q8_k::q6_k_dot_q8_k_scalar(&row_blocks, &a_blocks);
+                                    }
+                                }
+                            } else {
+                                let mut row_blocks = vec![crate::kernels::q4_k::Block {
+                                    d: 0.0, dmin: 0.0, scales: [0u8; 12], qs: [0u8; 128],
+                                }; bpr];
+                                for (jj, dst) in out.iter_mut().enumerate() {
+                                    let row_off = tensor_start + (start_row + jj) * row_bytes;
+                                    let raw = &mmap[row_off..row_off + row_bytes];
+                                    for b in 0..bpr {
+                                        row_blocks[b] = crate::kernels::q4_k::Block::from_bytes(&raw[b * 144..(b + 1) * 144]);
+                                    }
+                                    #[cfg(target_arch = "aarch64")]
+                                    {
+                                        *dst = if has_dotprod {
+                                            unsafe { crate::kernels::q8_k::q4_k_dot_q8_k_sdot(&row_blocks, &a_blocks) }
+                                        } else {
+                                            unsafe { crate::kernels::q8_k::q4_k_dot_q8_k_neon(&row_blocks, &a_blocks) }
+                                        };
+                                    }
+                                    #[cfg(not(target_arch = "aarch64"))]
+                                    {
+                                        *dst = crate::kernels::q8_k::q4_k_dot_q8_k_scalar(&row_blocks, &a_blocks);
+                                    }
+                                }
+                            }
+                        });
+                        return logits;
+                    }
+                }
+            }
+        }
+
         // Fallback: row-by-row mmap dequant (original slow path).
         use rayon::prelude::*;
-        let file = &self.model.file;
         (0..vocab_size).into_par_iter().map(|token_id| {
             thread_local! {
                 static BUF: std::cell::RefCell<Vec<f32>> = std::cell::RefCell::new(Vec::new());

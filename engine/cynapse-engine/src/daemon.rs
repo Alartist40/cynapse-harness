@@ -13,6 +13,81 @@ use anyhow::{bail, Result};
 
 pub const DEFAULT_DAEMON_PORT: u16 = 38265;
 
+/// Reads `MemAvailable` from `/proc/meminfo` in MiB (falls back to 0 on non-Linux/error).
+fn available_ram_mb() -> u64 {
+    #[cfg(target_os = "linux")]
+    if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                if let Some(kb) = rest.split_whitespace().next().and_then(|s| s.parse::<u64>().ok()) {
+                    return kb / 1024;
+                }
+            }
+        }
+    }
+    0
+}
+
+/// On heterogeneous ARM big.LITTLE CPUs (e.g. Cortex-A720 + A520), returns indices of
+/// performance cores (>= 85% of peak frequency) so inference threads avoid slow little cores.
+fn fast_cpu_cores() -> Option<Vec<usize>> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut freqs = Vec::new();
+        for cpu in 0..128 {
+            let p = format!("/sys/devices/system/cpu/cpu{}/cpufreq/cpuinfo_max_freq", cpu);
+            if let Ok(s) = std::fs::read_to_string(&p) {
+                if let Ok(f) = s.trim().parse::<u64>() {
+                    freqs.push((cpu, f));
+                }
+            }
+        }
+        if freqs.len() >= 4 {
+            let max_f = freqs.iter().map(|&(_, f)| f).max().unwrap_or(0);
+            let min_f = freqs.iter().map(|&(_, f)| f).min().unwrap_or(0);
+            if max_f > 0 && min_f * 100 < max_f * 85 {
+                let fast: Vec<usize> = freqs
+                    .into_iter()
+                    .filter(|&(_, f)| f * 100 >= max_f * 85)
+                    .map(|(c, _)| c)
+                    .collect();
+                if fast.len() >= 2 {
+                    return Some(fast);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Discovers the highest-tier ARM64 CPU ggml backend (`armv9.2_2` > `armv8.6_2` > `armv8.2_2`).
+fn find_arm_cpu_backend() -> Option<PathBuf> {
+    let names = [
+        "libggml-cpu-armv9.2_2.so",
+        "libggml-cpu-armv9.2_1.so",
+        "libggml-cpu-armv8.6_2.so",
+        "libggml-cpu-armv8.2_2.so",
+    ];
+    let mut dirs = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd.join("bin"));
+        dirs.push(cwd.join("lib"));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(PathBuf::from(home).join(".cynapse").join("lib"));
+    }
+    dirs.push(PathBuf::from("/usr/local/lib/ollama"));
+    for dir in dirs {
+        for name in &names {
+            let p = dir.join(name);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 pub struct LlamaServerDaemon {
     child: Option<Child>,
     pub port: u16,
@@ -136,22 +211,27 @@ impl LlamaServerDaemon {
             (Stdio::null(), Stdio::null())
         };
 
+        let avail_mb = available_ram_mb();
+        let model_mb = std::fs::metadata(model_path).map(|m| m.len() / (1024 * 1024)).unwrap_or(0);
         let vulkan_backend = Self::find_vulkan_backend();
-        let has_dri_gpu = Path::new("/dev/dri/renderD128").exists();
+        let arm_cpu_backend = find_arm_cpu_backend();
+        let fast_cores = fast_cpu_cores();
         let ngl = if let Some(custom_ngl) = crate::gpu_layers() {
             custom_ngl.to_string()
-        } else if vulkan_backend.is_some() || has_dri_gpu {
-            // AMD/Intel/ARM Immortalis Vulkan GPU detected
+        } else if vulkan_backend.is_some() && avail_mb >= model_mb + 2000 {
+            // Full unified-memory GPU offload only when libggml-vulkan.so AND ample RAM exist;
+            // avoid partial offload (-ngl 20) which bounces CPU<->GPU on every layer.
             "99".to_string()
         } else {
-            match crate::detect_vram_free_mb() {
-                Some(vram) if vram > 6000 => "99".to_string(),
-                Some(vram) if vram > 3000 => "33".to_string(),
-                Some(vram) if vram > 1000 => "16".to_string(),
-                _ => "0".to_string(),
-            }
+            "0".to_string()
         };
-        let threads = crate::physical_core_count().to_string();
+        let threads = if std::env::var("CYNAPSE_THREADS").is_ok() {
+            crate::physical_core_count().to_string()
+        } else if let Some(ref cores) = fast_cores {
+            cores.len().clamp(2, 8).to_string()
+        } else {
+            crate::physical_core_count().to_string()
+        };
         // Context size: uses configured engine context or default ENGINE_CTX_SIZE
         let ctx_size = crate::engine_ctx_size().to_string();
 
@@ -162,7 +242,14 @@ impl LlamaServerDaemon {
         };
         let _ = std::fs::create_dir_all(&kv_dir);
 
-        let mut cmd = Command::new(&bin);
+        let mut cmd = if let Some(ref cores) = fast_cores {
+            let csv: Vec<String> = cores.iter().map(|c| c.to_string()).collect();
+            let mut c = Command::new("taskset");
+            c.arg("-c").arg(csv.join(",")).arg(&bin);
+            c
+        } else {
+            Command::new(&bin)
+        };
         cmd.arg("-m")
             .arg(model_path)
             .arg("--port")
@@ -208,8 +295,14 @@ impl LlamaServerDaemon {
             }
         }
         cmd.env("LD_LIBRARY_PATH", ld_dirs.join(":"));
-        if let Some(ref vk_path) = vulkan_backend {
-            cmd.env("GGML_BACKEND_PATH", vk_path);
+        if ngl != "0" {
+            if let Some(ref vk_path) = vulkan_backend {
+                cmd.env("GGML_BACKEND_PATH", vk_path);
+            } else if let Some(ref cpu_path) = arm_cpu_backend {
+                cmd.env("GGML_BACKEND_PATH", cpu_path);
+            }
+        } else if let Some(ref cpu_path) = arm_cpu_backend {
+            cmd.env("GGML_BACKEND_PATH", cpu_path);
         }
 
         // Check for speculative decoding draft model in parent directory or ~/.cynapse/models

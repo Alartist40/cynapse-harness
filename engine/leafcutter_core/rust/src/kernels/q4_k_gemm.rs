@@ -375,7 +375,7 @@ pub fn q4_k_gemv_transposed_b(a: &[f32], b: &Q4KMatrix, c: &mut [f32], k: usize,
         && std::arch::is_x86_feature_detected!("avx2")
         && std::arch::is_x86_feature_detected!("fma");
     #[cfg(not(target_arch = "x86_64"))]
-    let use_avx2 = false;
+    let _use_avx2 = false;
 
     if n >= 256 {
         use rayon::prelude::*;

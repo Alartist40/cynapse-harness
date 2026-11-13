@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct DeltaNetStateCache {
     /// Per-layer matrix states: layer_idx -> flat Vec of [num_v_heads, head_v_dim, head_k_dim]
     states: HashMap<usize, Vec<f32>>,
@@ -25,6 +26,10 @@ impl DeltaNetStateCache {
     pub fn clear(&mut self) {
         self.states.clear();
         self.conv_states.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty() && self.conv_states.is_empty()
     }
 
     /// Get the matrix state for a layer, returning None if not yet initialized.

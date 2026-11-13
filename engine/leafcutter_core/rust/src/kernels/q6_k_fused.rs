@@ -57,7 +57,7 @@ pub fn q6_k_matmul_fused(a: &[f32], b: &Q6KMatrix, c: &mut [f32], m: usize, k: u
     #[cfg(target_arch = "x86_64")]
     let use_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
     #[cfg(not(target_arch = "x86_64"))]
-    let use_avx2 = false;
+    let _use_avx2 = false;
 
     require_capacity(bpr);
 

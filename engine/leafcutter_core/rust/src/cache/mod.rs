@@ -25,6 +25,7 @@ struct KVEntry {
     shape: Vec<usize>,
 }
 
+#[derive(Clone)]
 pub struct KVCache {
     /// f32 storage per layer (atomic K/V/shape trio)
     layers: HashMap<usize, KVEntry>,

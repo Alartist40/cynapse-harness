@@ -109,7 +109,7 @@ unsafe fn colibri_dot_i8_i8_avx2(w: &[i8], x: &[i8], len: usize) -> i32 {
 }
 
 #[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "dotprod")]
+#[target_feature(enable = "neon,dotprod")]
 unsafe fn colibri_dot_i8_i8_neon_dotprod(w: &[i8], x: &[i8], len: usize) -> i32 {
     use std::arch::aarch64::*;
 
@@ -119,7 +119,13 @@ unsafe fn colibri_dot_i8_i8_neon_dotprod(w: &[i8], x: &[i8], len: usize) -> i32 
     while i + 16 <= len {
         let wv = vld1q_s8(w.as_ptr().add(i));
         let xv = vld1q_s8(x.as_ptr().add(i));
-        acc0 = vdotq_s32(acc0, wv, xv);
+        std::arch::asm!(
+            "sdot {0:v}.4s, {1:v}.16b, {2:v}.16b",
+            inout(vreg) acc0,
+            in(vreg) wv,
+            in(vreg) xv,
+            options(pure, nomem, nostack)
+        );
         i += 16;
     }
 

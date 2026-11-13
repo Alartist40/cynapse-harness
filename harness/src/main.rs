@@ -90,6 +90,7 @@ fn resolve_models_dir() -> PathBuf {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    cynapse_engine::pin_rayon_to_fast_cores();
     let cli = Cli::parse();
     let models_dir = resolve_models_dir();
     std::fs::create_dir_all(&models_dir)?;

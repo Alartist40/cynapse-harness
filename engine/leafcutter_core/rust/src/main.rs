@@ -294,6 +294,8 @@ async fn main() {
         return;
     }
 
+    leafcutter::pin_rayon_to_fast_cores();
+
     match cli.command {
         Some(Commands::List) => {
             cmd_list_auto();

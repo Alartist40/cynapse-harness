@@ -248,8 +248,26 @@ impl CynapseDoctor {
         let hw = cynapse_engine::probe_hardware_info();
         let avail_ram_mb = hw.ram_avail_mb;
         let total_ram_mb = hw.ram_total_mb;
+        let swap_total_kb = std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|s| {
+                s.lines().find_map(|l| {
+                    l.strip_prefix("SwapTotal:")
+                        .and_then(|r| r.split_whitespace().next())
+                        .and_then(|v| v.parse::<u64>().ok())
+                })
+            })
+            .unwrap_or(1);
 
-        if avail_ram_mb >= 3000 || total_ram_mb >= 12000 {
+        if swap_total_kb == 0 && total_ram_mb <= 16384 && avail_ram_mb < 8500 {
+            DoctorItem {
+                subsystem: "Hardware".into(),
+                check_name: "Host RAM & Safety Headroom".into(),
+                status: DoctorStatus::Warning,
+                detail: format!("Total RAM: {} MB | Available: {} MB | Swap: 0 MB (9B models risk OOM without swap/zram)", total_ram_mb, avail_ram_mb),
+                fix_recommendation: Some("Enable 4-8 GB zram or close heavy desktop apps before loading 9B models.".into()),
+            }
+        } else if avail_ram_mb >= 3000 || total_ram_mb >= 12000 {
             DoctorItem {
                 subsystem: "Hardware".into(),
                 check_name: "Host RAM & Safety Headroom".into(),
@@ -287,11 +305,16 @@ impl CynapseDoctor {
                 fix_recommendation: None,
             }
         } else {
+            let simd_label = if cfg!(target_arch = "aarch64") {
+                "NEON/DOTPROD SIMD fallback"
+            } else {
+                "AVX2 SIMD fallback"
+            };
             DoctorItem {
                 subsystem: "GPU / Hardware".into(),
                 check_name: "Hardware Acceleration & GPU".into(),
                 status: DoctorStatus::Pass,
-                detail: "CPU host execution active (AVX2 SIMD fallback).".into(),
+                detail: format!("CPU host execution active ({}).", simd_label),
                 fix_recommendation: None,
             }
         }

@@ -27,10 +27,6 @@ name = "inspect_ornith"
 path = "src/bin/inspect_ornith.rs"
 
 [[bin]]
-name = "test_generation"
-path = "src/bin/test_generation.rs"
-
-[[bin]]
 name = "probe_3d"
 path = "src/bin/probe_3d.rs"
 
