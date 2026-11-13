@@ -68,16 +68,27 @@ impl LlamaServerDaemon {
         None
     }
 
-    /// Checks if a daemon is actively responding on the given port.
+    /// Checks if a daemon is actively ready (HTTP /health returns 200 OK, not 503 Loading).
     pub fn is_healthy(port: u16) -> bool {
+        use std::io::{Read, Write};
         let addr_str = format!("127.0.0.1:{}", port);
-        if let Ok(addr) = addr_str.parse() {
-            if let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-                drop(stream);
-                return true;
-            }
+        let Ok(addr) = addr_str.parse() else { return false; };
+        let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(250)) else {
+            return false;
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+        if stream.write_all(b"GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").is_err() {
+            return false;
         }
-        false
+        let mut buf = [0u8; 64];
+        match stream.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                let head = String::from_utf8_lossy(&buf[..n]);
+                head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")
+            }
+            _ => false,
+        }
     }
 
     /// Spawns a supervised `llama-server` child process.
@@ -195,9 +206,14 @@ impl LlamaServerDaemon {
             model_path: model_path.to_path_buf(),
         };
 
-        // Poll health for up to 10 seconds
+        // Poll HTTP /health == 200 OK for up to 30 seconds (9B GGUF takes ~10-20s to load)
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(10) {
+        while start.elapsed() < Duration::from_secs(30) {
+            if let Some(ref mut c) = daemon.child {
+                if let Ok(Some(status)) = c.try_wait() {
+                    bail!("`llama-server` exited prematurely with status {}. Check logs at {}", status, log_path.display());
+                }
+            }
             if Self::is_healthy(port) {
                 return Ok(daemon);
             }
@@ -205,7 +221,7 @@ impl LlamaServerDaemon {
         }
 
         daemon.shutdown();
-        bail!("`llama-server` did not become healthy within 10 seconds. Check logs at {}", log_path.display());
+        bail!("`llama-server` did not become healthy within 30 seconds. Check logs at {}", log_path.display());
     }
 
     /// Singleton daemon spawner: checks health, respects failure cooldown, and spawns if binary and model exist.

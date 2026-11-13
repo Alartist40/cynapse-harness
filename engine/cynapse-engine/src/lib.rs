@@ -1383,13 +1383,21 @@ pub async fn try_llama_server_stream(
     });
 
     let start = Instant::now();
-    let resp = client
-        .post(&llama_url)
-        .header("Accept", "application/x-ndjson, text/event-stream, application/json")
-        .json(&payload)
-        .send()
-        .await
-        .context("Failed to connect to llama-server daemon")?;
+    let resp = loop {
+        let r = client
+            .post(&llama_url)
+            .header("Accept", "application/x-ndjson, text/event-stream, application/json")
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to connect to llama-server daemon")?;
+
+        if r.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE && start.elapsed() < Duration::from_secs(25) {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            continue;
+        }
+        break r;
+    };
 
     if !resp.status().is_success() {
         anyhow::bail!("llama-server returned HTTP error: {}", resp.status());
