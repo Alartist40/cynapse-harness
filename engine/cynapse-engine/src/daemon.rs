@@ -68,6 +68,20 @@ impl LlamaServerDaemon {
         None
     }
 
+    /// Discovers `libggml-vulkan.so` for GPU offloading via `GGML_BACKEND_PATH`.
+    pub fn find_vulkan_backend() -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join("lib").join("libggml-vulkan.so"));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            candidates.push(PathBuf::from(&home).join(".cynapse").join("lib").join("libggml-vulkan.so"));
+        }
+        candidates.push(PathBuf::from("/usr/local/lib/ollama/vulkan/libggml-vulkan.so"));
+        candidates.push(PathBuf::from("/usr/local/lib/libggml-vulkan.so"));
+        candidates.into_iter().find(|p| p.is_file())
+    }
+
     /// Checks if a daemon is actively ready (HTTP /health returns 200 OK, not 503 Loading).
     pub fn is_healthy(port: u16) -> bool {
         use std::io::{Read, Write};
@@ -120,8 +134,12 @@ impl LlamaServerDaemon {
             (Stdio::null(), Stdio::null())
         };
 
+        let vulkan_backend = Self::find_vulkan_backend();
         let ngl = if let Some(custom_ngl) = crate::gpu_layers() {
             custom_ngl.to_string()
+        } else if vulkan_backend.is_some() {
+            // AMD/Intel/Unified Vulkan GPU detected via libggml-vulkan.so
+            "99".to_string()
         } else {
             match crate::detect_vram_free_mb() {
                 Some(vram) if vram > 6000 => "99".to_string(),
@@ -173,6 +191,9 @@ impl LlamaServerDaemon {
             }
         }
         cmd.env("LD_LIBRARY_PATH", ld_dirs.join(":"));
+        if let Some(ref vk_path) = vulkan_backend {
+            cmd.env("GGML_BACKEND_PATH", vk_path);
+        }
 
         // Check for speculative decoding draft model in parent directory or ~/.cynapse/models
         let mut draft_found = false;

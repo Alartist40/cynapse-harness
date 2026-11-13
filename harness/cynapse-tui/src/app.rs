@@ -448,15 +448,9 @@ impl TuiApp {
             modal: ActiveModal::None,
             theme: crate::theme::load_theme(),
             is_generating: false,
-            last_tok_per_sec: 4.8,
+            last_tok_per_sec: 0.0,
             last_latency_sec: 0.0,
-            throughput_history: {
-                let mut v = std::collections::VecDeque::with_capacity(30);
-                for val in [3.2, 3.8, 4.1, 4.5, 4.2, 4.7, 4.8, 5.0, 4.9, 4.8] {
-                    v.push_back(val);
-                }
-                v
-            },
+            throughput_history: std::collections::VecDeque::with_capacity(30),
             scroll_offset: 0,
             last_max_scroll: AtomicU16::new(0),
             auto_scroll: true,
