@@ -148,6 +148,7 @@ impl Shards {
             for name in &shard_names {
                 let path = dir.join(name);
                 let f = File::open(&path).map_err(|e| format!("open {path:?}: {e}"))?;
+                crate::async_io::AsyncWeightPrefetcher::advise_random(&f);
                 paths.push(name.clone());
                 files.push(f);
             }
@@ -196,6 +197,7 @@ impl Shards {
                 ));
             }
             let mut f = File::open(&single).map_err(|e| format!("open {single:?}: {e}"))?;
+            crate::async_io::AsyncWeightPrefetcher::advise_random(&f);
             let header = read_safetensors_header(&mut f)?;
             for (name, meta) in header {
                 index.insert(name.clone(), (0, meta));

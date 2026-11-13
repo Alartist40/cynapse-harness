@@ -759,9 +759,15 @@ impl TuiApp {
     pub fn preload_active_model(&self) {
         let endpoint = self.tier1_endpoint.clone();
         let model_name = self.active_model_name.clone();
-        tokio::spawn(async move {
-            let _ = cynapse_engine::preload_model(&endpoint, &model_name).await;
-        });
+        let persona_prompt = self.persona_mgr.build_system_prompt();
+        let warmup_prefix = cynapse_core::offline_agent::compile_zone_a_prefix_with_tools(&persona_prompt, &[]);
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                if cynapse_engine::preload_model(&endpoint, &model_name).await.is_ok() {
+                    cynapse_engine::warmup_slot_prefix(&warmup_prefix).await;
+                }
+            });
+        }
     }
 
     pub fn handle_approval_decision(&mut self, approved: bool) {
@@ -1101,6 +1107,12 @@ impl TuiApp {
                 thinking: m.thinking,
             })
             .collect();
+        let sid = self.session_id.clone();
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                cynapse_engine::sync_daemon_slot_kv(&sid, true).await;
+            });
+        }
         Ok(())
     }
 
@@ -1127,6 +1139,12 @@ impl TuiApp {
         };
 
         let _ = self.session_mgr.save_session(&data);
+        let sid = self.session_id.clone();
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                cynapse_engine::sync_daemon_slot_kv(&sid, false).await;
+            });
+        }
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -3330,7 +3348,13 @@ impl TuiApp {
 
                                 // Build Two-Zone Prompt: Zone A (Pruned Invariant Prefix) & Zone B (Variable Tail)
                                 let system_prompt = self.compile_zone_a_for_query(&trimmed);
-                                let memory_prompt = self.dendrite_ctx.build_prompt_with_options(&trimmed, 1500, true, false);
+                                let skip_memory = trimmed.split_whitespace().count() <= 10
+                                    && cynapse_core::offline_agent::prune_tools_for_query(&trimmed).is_empty();
+                                let memory_prompt = if skip_memory {
+                                    String::new()
+                                } else {
+                                    self.dendrite_ctx.build_prompt_with_options(&trimmed, 1500, true, false)
+                                };
 
                                 let history_context: String = self.messages
                                     .iter()

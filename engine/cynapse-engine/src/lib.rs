@@ -1530,6 +1530,44 @@ pub async fn unload_model(endpoint: &str, model_name: &str) {
     let _ = client.post(&url).json(&payload).send().await;
 }
 
+/// Pre-evaluate invariant Zone A prefix into Slot 0 KV cache during startup.
+pub async fn warmup_slot_prefix(system_prompt: &str) {
+    let port = daemon::DEFAULT_DAEMON_PORT;
+    if system_prompt.trim().is_empty() || !daemon::LlamaServerDaemon::is_healthy(port) {
+        return;
+    }
+    let (slot_id, cache_prompt) = slots::SlotManager::slot_params(slots::SlotPurpose::Interactive);
+    let url = format!("http://127.0.0.1:{}/v1/chat/completions", port);
+    let payload = serde_json::json!({
+        "messages": [{"role": "system", "content": system_prompt}],
+        "max_tokens": 1,
+        "stream": false,
+        "cache_prompt": cache_prompt,
+        "slot_id": slot_id,
+        "id_slot": slot_id
+    });
+    let _ = shared_http_client().post(&url).json(&payload).send().await;
+}
+
+/// Strata-inspired Slot 0 binary KV snapshot save/restore via llama-server `--slot-save-path`.
+pub async fn sync_daemon_slot_kv(session_id: &str, restore: bool) {
+    let port = daemon::DEFAULT_DAEMON_PORT;
+    if session_id.trim().is_empty() || !daemon::LlamaServerDaemon::is_healthy(port) {
+        return;
+    }
+    let clean: String = session_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+    if clean.is_empty() {
+        return;
+    }
+    let action = if restore { "restore" } else { "save" };
+    let url = format!("http://127.0.0.1:{}/slots/0?action={}", port, action);
+    let _ = shared_http_client()
+        .post(&url)
+        .json(&serde_json::json!({ "filename": format!("{}.bin", clean) }))
+        .send()
+        .await;
+}
+
 /// Preload and pin model into memory (keep_alive: -1 for Ollama, or spawn daemon for local GGUF).
 pub async fn preload_model(endpoint: &str, model_name: &str) -> Result<()> {
     let _client = shared_http_client();

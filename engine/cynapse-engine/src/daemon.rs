@@ -152,6 +152,13 @@ impl LlamaServerDaemon {
         // Context size: uses configured engine context or default ENGINE_CTX_SIZE
         let ctx_size = crate::engine_ctx_size().to_string();
 
+        let kv_dir = if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".cynapse").join("kv_snapshots")
+        } else {
+            PathBuf::from("./data/kv_snapshots")
+        };
+        let _ = std::fs::create_dir_all(&kv_dir);
+
         let mut cmd = Command::new(&bin);
         cmd.arg("-m")
             .arg(model_path)
@@ -165,6 +172,12 @@ impl LlamaServerDaemon {
             .arg(&threads)
             .arg("--flash-attn")
             .arg("auto")
+            .arg("--cache-type-k")
+            .arg("q8_0")
+            .arg("--cache-type-v")
+            .arg("q8_0")
+            .arg("--slot-save-path")
+            .arg(&kv_dir)
             .arg("--parallel")
             .arg("1")
             .arg("--ctx-size")
