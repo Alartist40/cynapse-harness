@@ -770,60 +770,68 @@ pub async fn query_model_stream(
 ) -> Result<ExecutionStats> {
     match tier {
         EngineTier::Tier1Fast => {
-            if leafcutter::llama_ffi::is_available() {
-                if let Some(local_path) = find_model_file_path(model_name) {
-                    if local_path.is_file() {
-                        let p = local_path.clone();
-                        let pr = if system_prompt.is_empty() {
-                            prompt.to_string()
-                        } else {
-                            format!("{}\n\n{}", system_prompt, prompt)
-                        };
-                        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(TokenType, String)>();
-                        let s = sampling();
-                        let handle = tokio::task::spawn_blocking(move || {
-                            let start = Instant::now();
-                            let ngl = std::env::var("CYNAPSE_N_GPU_LAYERS")
-                                .ok()
-                                .and_then(|v| v.parse().ok())
-                                .unwrap_or(99);
-                            let ctx_size = std::env::var("CYNAPSE_CTX_SIZE")
-                                .ok()
-                                .and_then(|v| v.parse().ok())
-                                .unwrap_or(4096);
-                            let engine = get_or_load_llama_engine(&p, ngl, ctx_size)
-                                .map_err(|e| anyhow::anyhow!("LlamaInProcessEngine load failed: {}", e))?;
-                            let tokens = engine.generate_stream(&pr, 4096, s.temperature, |piece| {
-                                let _ = tx.send((TokenType::Response, piece.to_string()));
-                            }).map_err(|e| anyhow::anyhow!("LlamaInProcessEngine generate failed: {}", e))?;
-                            let elapsed_sec = start.elapsed().as_secs_f64().max(0.001);
-                            let tokens_generated = tokens.len().max(1);
-                            let tok_per_sec = tokens_generated as f64 / elapsed_sec;
-                            let avail_ram_gb = available_ram_mb() as f64 / 1024.0;
-                            Ok::<ExecutionStats, anyhow::Error>(ExecutionStats {
-                                model_name: p.file_name().unwrap_or_default().to_string_lossy().to_string(),
-                                tokens_generated,
-                                elapsed_sec,
-                                tok_per_sec,
-                                avail_ram_gb,
-                            })
-                        });
+            // Priority 1: Managed llama-server daemon with KV slot pinning & speculative draft decoding
+            let res = query_tier1_stream(endpoint, model_name, prompt, system_prompt, &mut on_token).await;
+            match res {
+                Ok(stats) => Ok(stats),
+                Err(daemon_err) => {
+                    // Priority 2: In-process llama engine fallback only if daemon failed or unavailable
+                    if leafcutter::llama_ffi::is_available() {
+                        if let Some(local_path) = find_model_file_path(model_name) {
+                            if local_path.is_file() {
+                                let p = local_path.clone();
+                                let pr = if system_prompt.is_empty() {
+                                    prompt.to_string()
+                                } else {
+                                    format!("{}\n\n{}", system_prompt, prompt)
+                                };
+                                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(TokenType, String)>();
+                                let s = sampling();
+                                let handle = tokio::task::spawn_blocking(move || {
+                                    let start = Instant::now();
+                                    let ngl = std::env::var("CYNAPSE_N_GPU_LAYERS")
+                                        .ok()
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(99);
+                                    let ctx_size = std::env::var("CYNAPSE_CTX_SIZE")
+                                        .ok()
+                                        .and_then(|v| v.parse().ok())
+                                        .unwrap_or(4096);
+                                    let engine = get_or_load_llama_engine(&p, ngl, ctx_size)
+                                        .map_err(|e| anyhow::anyhow!("LlamaInProcessEngine load failed: {}", e))?;
+                                    let tokens = engine.generate_stream(&pr, 4096, s.temperature, |piece| {
+                                        let _ = tx.send((TokenType::Response, piece.to_string()));
+                                    }).map_err(|e| anyhow::anyhow!("LlamaInProcessEngine generate failed: {}", e))?;
+                                    let elapsed_sec = start.elapsed().as_secs_f64().max(0.001);
+                                    let tokens_generated = tokens.len().max(1);
+                                    let tok_per_sec = tokens_generated as f64 / elapsed_sec;
+                                    let avail_ram_gb = available_ram_mb() as f64 / 1024.0;
+                                    Ok::<ExecutionStats, anyhow::Error>(ExecutionStats {
+                                        model_name: p.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                                        tokens_generated,
+                                        elapsed_sec,
+                                        tok_per_sec,
+                                        avail_ram_gb,
+                                    })
+                                });
 
-                        let mut token_received = false;
-                        while let Some((ttype, text)) = rx.recv().await {
-                            token_received = true;
-                            on_token(ttype, &text);
-                        }
+                                let mut token_received = false;
+                                while let Some((ttype, text)) = rx.recv().await {
+                                    token_received = true;
+                                    on_token(ttype, &text);
+                                }
 
-                        if let Ok(Ok(stats)) = handle.await {
-                            if token_received {
-                                return Ok(stats);
+                                if let Ok(Ok(stats)) = handle.await {
+                                    if token_received {
+                                        return Ok(stats);
+                                    }
+                                }
                             }
                         }
                     }
+                    Err(daemon_err)
                 }
             }
-            query_tier1_stream(endpoint, model_name, prompt, system_prompt, on_token).await
         }
         EngineTier::Tier2LargeGguf => {
             if let Some(local_path) = find_model_file_path(model_name) {
