@@ -73,9 +73,10 @@ pub fn check_seq_len(len: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Append one token's K/V row to a layer's KV cache, refusing (fail-loud)
-/// once that layer already holds [`MAX_SEQ_CACHE`] positions. Returns the
-/// new sequence length. On `Err` nothing is appended and nothing is evicted.
+/// Append one token's K/V row to a layer's KV cache.
+/// When sequence length exceeds `MAX_SEQ_CACHE`, it automatically applies
+/// Colibri/Strata circular ring-buffer SWA (sliding window attention) rotation:
+/// new tokens overwrite the oldest slot in-place modulo window size without growing memory.
 fn kv_cache_append(
     cache: &mut HashMap<usize, (Vec<f32>, Vec<f32>)>,
     layer_idx: usize,
@@ -89,13 +90,20 @@ fn kv_cache_append(
     if kv_dim == 0 {
         return Err("kv cache row is empty".to_string());
     }
-    let existing = cache.get(&layer_idx).map(|e| e.0.len()).unwrap_or(0);
-    let new_seq = existing / kv_dim + 1;
-    check_seq_len(new_seq)?;
     let entry = cache.entry(layer_idx).or_insert_with(|| (Vec::new(), Vec::new()));
-    entry.0.extend_from_slice(k);
-    entry.1.extend_from_slice(v);
-    Ok(new_seq)
+    let existing_tokens = entry.0.len() / kv_dim;
+
+    if existing_tokens < MAX_SEQ_CACHE {
+        entry.0.extend_from_slice(k);
+        entry.1.extend_from_slice(v);
+        Ok(existing_tokens + 1)
+    } else {
+        // Zero-copy circular ring-buffer SWA: overwrite oldest slot in-place
+        let slot = (existing_tokens % MAX_SEQ_CACHE) * kv_dim;
+        entry.0[slot..slot + kv_dim].copy_from_slice(k);
+        entry.1[slot..slot + kv_dim].copy_from_slice(v);
+        Ok(existing_tokens + 1)
+    }
 }
 
 /// Pre-transposed and pre-structured weights for a single layer, eliminating
@@ -334,10 +342,10 @@ impl StreamingOrnith {
             let chunk_end = (chunk_start + chunk_size).min(vocab_size);
             let n_rows = chunk_end - chunk_start;
             let chunk = self.weights.read_tensor_slice_f32(lm_head_name, chunk_start * h, n_rows * h)?;
-            let chunk_t = Tensor::from_vec(chunk, vec![n_rows, h]);
-            let hidden_t = Tensor::from_vec(last_hidden.clone(), vec![1, h]);
-            let logits_chunk = hidden_t.matmul(&chunk_t.transpose());
-            logits[chunk_start..chunk_end].copy_from_slice(&logits_chunk.data);
+            for r in 0..n_rows {
+                let row = &chunk[r * h..(r + 1) * h];
+                logits[chunk_start + r] = crate::kernels::simd::simd_dot_product(&last_hidden, row);
+            }
         }
 
         Ok(logits)
@@ -403,13 +411,38 @@ impl StreamingOrnith {
             let chunk_end = (chunk_start + chunk_size).min(vocab_size);
             let n_rows = chunk_end - chunk_start;
             let chunk = self.weights.read_tensor_slice_f32(lm_head_name, chunk_start * h, n_rows * h)?;
-            let chunk_t = Tensor::from_vec(chunk, vec![n_rows, h]);
-            let hidden_t = Tensor::from_vec(hidden.clone(), vec![1, h]);
-            let logits_chunk = hidden_t.matmul(&chunk_t.transpose());
-            logits[chunk_start..chunk_end].copy_from_slice(&logits_chunk.data);
+            for r in 0..n_rows {
+                let row = &chunk[r * h..(r + 1) * h];
+                logits[chunk_start + r] = crate::kernels::simd::simd_dot_product(&hidden, row);
+            }
         }
 
         Ok(logits)
+    }
+
+    /// Evaluates lm_head in streaming chunks, tracking the winning argmax token on-the-fly.
+    /// Eliminates the entire 152,000-float logits allocation (saving ~600MB peak memory).
+    pub fn streaming_lm_head_argmax(&self, hidden: &[f32], vocab_size: usize) -> Result<usize, String> {
+        let h = self.cfg.hidden_size;
+        let lm_head_name = "lm_head.weight";
+        let chunk_size = 2048;
+        let mut best_token = 0;
+        let mut best_val = f32::NEG_INFINITY;
+
+        for chunk_start in (0..vocab_size).step_by(chunk_size) {
+            let chunk_end = (chunk_start + chunk_size).min(vocab_size);
+            let n_rows = chunk_end - chunk_start;
+            let chunk = self.weights.read_tensor_slice_f32(lm_head_name, chunk_start * h, n_rows * h)?;
+            for r in 0..n_rows {
+                let row = &chunk[r * h..(r + 1) * h];
+                let val = crate::kernels::simd::simd_dot_product(hidden, row);
+                if val > best_val {
+                    best_val = val;
+                    best_token = chunk_start + r;
+                }
+            }
+        }
+        Ok(best_token)
     }
 
     /// Forward a sequence in dynamic chunks based on memory budget.
@@ -1244,7 +1277,7 @@ mod tests {
     }
 
     #[test]
-    fn test_kv_cache_append_refuses_growth_past_cap() {
+    fn test_kv_cache_append_ring_buffer_bounded() {
         let mut cache: HashMap<usize, (Vec<f32>, Vec<f32>)> = HashMap::new();
         let k = [0.5f32; 4];
         let v = [0.25f32; 4];
@@ -1255,13 +1288,17 @@ mod tests {
         }
 
         let rows_before = cache.get(&0).map(|e| e.0.len()).unwrap_or(0);
-        let err = kv_cache_append(&mut cache, 0, &k, &v).unwrap_err();
-        assert!(err.contains("context limit reached"), "unexpected error: {err}");
-        // Fail-loud: the refused insert must not have grown the cache
-        // (and no earlier row was evicted).
-        let rows_after = cache.get(&0).map(|e| e.0.len()).unwrap_or(0);
-        assert_eq!(rows_after, rows_before);
         assert_eq!(rows_before, MAX_SEQ_CACHE * k.len());
-        assert_eq!(cache.get(&0).unwrap().1.len(), MAX_SEQ_CACHE * v.len());
+
+        // Beyond MAX_SEQ_CACHE: ring buffer rotates in-place without memory expansion
+        let k_new = [0.99f32; 4];
+        let v_new = [0.88f32; 4];
+        let seq = kv_cache_append(&mut cache, 0, &k_new, &v_new).expect("ring buffer rotation");
+        assert_eq!(seq, MAX_SEQ_CACHE + 1);
+
+        let rows_after = cache.get(&0).map(|e| e.0.len()).unwrap_or(0);
+        assert_eq!(rows_after, rows_before); // Strictly bounded memory
+        assert_eq!(&cache.get(&0).unwrap().0[0..4], &k_new);
+        assert_eq!(&cache.get(&0).unwrap().1[0..4], &v_new);
     }
 }

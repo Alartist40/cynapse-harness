@@ -1,6 +1,7 @@
 //! LeafcutterLLM — Memory-safe LLM inference engine
 
 pub mod api;
+pub mod async_io;
 pub mod backend;
 pub mod bridge;
 pub mod cache;

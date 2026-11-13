@@ -186,6 +186,85 @@ pub fn colibri_q8_0_gemv(a: &[f32], b: &Q8Matrix, c: &mut [f32], k: usize, n: us
     }
 }
 
+/// 16-Row Register-Blocked Q8_0 GEMV (Colibri v2.1 innovation).
+/// Reuses the activation vector across 16 matrix rows simultaneously, eliminating
+/// redundant memory traffic and reducing activation cache misses by up to 16x.
+pub fn colibri_q8_0_gemv_16row(a: &[f32], b: &Q8Matrix, c: &mut [f32]) {
+    let k = b.cols;
+    let n = b.rows;
+    assert_eq!(a.len(), k);
+    assert_eq!(c.len(), n);
+    let bpr = b.blocks_per_row(); // k / 32
+
+    let mut j = 0;
+    while j + 16 <= n {
+        let mut sums = [0.0f32; 16];
+        for block_idx in 0..bpr {
+            let base = block_idx * 32;
+            let a_slice = &a[base..base + 32];
+            for r in 0..16 {
+                let block = &b.blocks[(j + r) * bpr + block_idx];
+                sums[r] += colibri_q8_0_block_dot_f32(&block.qs, block.scale, a_slice);
+            }
+        }
+        c[j..j + 16].copy_from_slice(&sums);
+        j += 16;
+    }
+
+    // Remainder rows
+    while j < n {
+        let row_base = j * bpr;
+        let mut sum_f = 0.0f32;
+        for block_idx in 0..bpr {
+            let block = &b.blocks[row_base + block_idx];
+            let base = block_idx * 32;
+            let a_slice = &a[base..base + 32];
+            sum_f += colibri_q8_0_block_dot_f32(&block.qs, block.scale, a_slice);
+        }
+        c[j] = sum_f;
+        j += 1;
+    }
+}
+
+/// 16-Row Register-Blocked Q4_0 GEMV (Colibri v2.1 innovation).
+/// Reuses the activation vector across 16 matrix rows simultaneously.
+pub fn colibri_q4_0_gemv_16row(a: &[f32], b: &Q4Matrix, c: &mut [f32]) {
+    let k = b.cols;
+    let n = b.rows;
+    assert_eq!(a.len(), k);
+    assert_eq!(c.len(), n);
+    let bpr = b.blocks_per_row(); // k / 32
+
+    let mut j = 0;
+    while j + 16 <= n {
+        let mut sums = [0.0f32; 16];
+        for block_idx in 0..bpr {
+            let base = block_idx * 32;
+            let a_slice = &a[base..base + 32];
+            for r in 0..16 {
+                let block = &b.blocks[(j + r) * bpr + block_idx];
+                sums[r] += colibri_q4_0_block_dot_f32(&block.qs, block.scale, a_slice);
+            }
+        }
+        c[j..j + 16].copy_from_slice(&sums);
+        j += 16;
+    }
+
+    // Remainder rows
+    while j < n {
+        let row_base = j * bpr;
+        let mut sum_f = 0.0f32;
+        for block_idx in 0..bpr {
+            let block = &b.blocks[row_base + block_idx];
+            let base = block_idx * 32;
+            let a_slice = &a[base..base + 32];
+            sum_f += colibri_q4_0_block_dot_f32(&block.qs, block.scale, a_slice);
+        }
+        c[j] = sum_f;
+        j += 1;
+    }
+}
+
 /// Fast Colibri Q4_0 GEMV: `c = a @ B^T` where `a` has shape `[1, k]` and `B` has shape `[n, k]`.
 /// Unpacks 4-bit nibbles and accumulates with activations without heap buffers.
 pub fn colibri_q4_0_gemv(a: &[f32], b: &Q4Matrix, c: &mut [f32], k: usize, n: usize) {
@@ -265,5 +344,11 @@ mod tests {
         assert_eq!(out.len(), n);
         assert!(out[0] > 0.0);
         assert!((out[1]).abs() < 1e-4);
+
+        let mut out_16 = vec![0.0f32; n];
+        colibri_q8_0_gemv_16row(&a, &mat, &mut out_16);
+        for i in 0..n {
+            assert!((out[i] - out_16[i]).abs() < 1e-5, "Mismatch at row {}: {} vs {}", i, out[i], out_16[i]);
+        }
     }
 }

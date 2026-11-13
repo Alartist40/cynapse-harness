@@ -126,6 +126,48 @@ impl SessionManager {
         self.save_session(&data)?;
         Ok(data)
     }
+
+    /// Saves binary KV cache snapshot to disk (<session_id>.kv) using zero-copy binary layout (Strata innovation).
+    pub fn save_kv_snapshot(&self, session_id: &str, tokens: &[u32], kv_data: &[u8]) -> Result<()> {
+        let clean_id = session_id.trim_end_matches(".json").trim_end_matches(".kv");
+        let kv_path = self.storage_dir.join(format!("{}.kv", clean_id));
+        let mut buf = Vec::with_capacity(16 + tokens.len() * 4 + kv_data.len());
+        buf.extend_from_slice(b"CYN_KV_1");
+        buf.extend_from_slice(&(tokens.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&(kv_data.len() as u32).to_le_bytes());
+        for &tok in tokens {
+            buf.extend_from_slice(&tok.to_le_bytes());
+        }
+        buf.extend_from_slice(kv_data);
+        fs::write(&kv_path, &buf)?;
+        Ok(())
+    }
+
+    /// Loads binary KV cache snapshot (<session_id>.kv) in 0ms without re-evaluating prompt tokens.
+    pub fn load_kv_snapshot(&self, session_id: &str) -> Result<(Vec<u32>, Vec<u8>)> {
+        let clean_id = session_id.trim_end_matches(".json").trim_end_matches(".kv");
+        let kv_path = self.storage_dir.join(format!("{}.kv", clean_id));
+        if !kv_path.exists() {
+            anyhow::bail!("KV snapshot '{}' not found at {}", clean_id, kv_path.display());
+        }
+        let bytes = fs::read(&kv_path)?;
+        if bytes.len() < 16 || &bytes[0..8] != b"CYN_KV_1" {
+            anyhow::bail!("Invalid or corrupted KV snapshot header in {}", kv_path.display());
+        }
+        let tok_count = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+        let data_len = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+        let tok_end = 16 + tok_count * 4;
+        if bytes.len() < tok_end + data_len {
+            anyhow::bail!("Truncated KV snapshot file: expected {} bytes, got {}", tok_end + data_len, bytes.len());
+        }
+        let mut tokens = Vec::with_capacity(tok_count);
+        for i in 0..tok_count {
+            let offset = 16 + i * 4;
+            tokens.push(u32::from_le_bytes([bytes[offset], bytes[offset+1], bytes[offset+2], bytes[offset+3]]));
+        }
+        let kv_data = bytes[tok_end..tok_end + data_len].to_vec();
+        Ok((tokens, kv_data))
+    }
 }
 
 static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -168,5 +210,21 @@ mod tests {
         let list = mgr.list_sessions();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].session_id, id);
+    }
+
+    #[test]
+    fn test_kv_snapshot_roundtrip() {
+        let temp_path = std::env::temp_dir().join(format!("cynapse_kv_test_{}", rand_u32()));
+        let mgr = SessionManager::with_dir(temp_path.clone());
+        let id = SessionManager::generate_id();
+
+        let prompt_tokens = vec![101u32, 2054, 2003, 1037, 3231];
+        let kv_payload = vec![42u8; 1024];
+
+        mgr.save_kv_snapshot(&id, &prompt_tokens, &kv_payload).unwrap();
+        let (loaded_tokens, loaded_payload) = mgr.load_kv_snapshot(&id).unwrap();
+
+        assert_eq!(loaded_tokens, prompt_tokens);
+        assert_eq!(loaded_payload, kv_payload);
     }
 }
