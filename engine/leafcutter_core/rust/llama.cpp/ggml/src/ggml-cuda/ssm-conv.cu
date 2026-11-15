@@ -3,12 +3,16 @@
 #include "unary.cuh"
 
 template <bool apply_silu, size_t split_d_inner, size_t d_conv>
-static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float * __restrict__ src1,
-                                    const float * __restrict__ bias,
+static __global__ void ssm_conv_f32(const float * src0_ptr, const float * src1_ptr,
+                                    const float * bias_ptr,
                                     const int src0_nb0, const int src0_nb1, const int src0_nb2, const int src1_nb1,
-                                    float * __restrict__ dst, const int dst_nb0, const int dst_nb1, const int dst_nb2,
+                                    float * dst_ptr, const int dst_nb0, const int dst_nb1, const int dst_nb2,
                                     const int64_t n_t) {
     ggml_cuda_pdl_lc();
+    const float * GGML_CUDA_RESTRICT src0 = src0_ptr;
+    const float * GGML_CUDA_RESTRICT src1 = src1_ptr;
+    const float * GGML_CUDA_RESTRICT bias = bias_ptr;
+    float       * GGML_CUDA_RESTRICT dst  = dst_ptr;
     GGML_UNUSED(src0_nb0);
     const int tid  = threadIdx.x;
     const int bidx = blockIdx.x;
@@ -147,9 +151,10 @@ static void ssm_conv_f32_cuda(const float * src0, const float * src1, const floa
         case 3:  launch_kernel(std::integral_constant<int, 3 >{}); break;
         case 4:  launch_kernel(std::integral_constant<int, 4 >{}); break;
         case 5:  launch_kernel(std::integral_constant<int, 5 >{}); break;
+        case 7:  launch_kernel(std::integral_constant<int, 7 >{}); break;
         case 9:  launch_kernel(std::integral_constant<int, 9 >{}); break;
         case 15: launch_kernel(std::integral_constant<int, 15>{}); break;
-        default: GGML_ABORT("Only support kernel sizes 3, 4, 5, 9, 15 right now.");
+        default: GGML_ABORT("Only support kernel sizes 3, 4, 5, 7, 9, 15 right now.");
     }
 }
 

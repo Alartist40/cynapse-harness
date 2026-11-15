@@ -12,6 +12,8 @@ harness/cynapse-core/data/
 .agents/skills/unlazy/
 /bin/
 /lib/
+**/.venv/
+/output
 
 # Personal & internal technical planning documents
 *.pdf

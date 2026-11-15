@@ -1997,6 +1997,34 @@ impl TuiApp {
                                     _ => {}
                                 },
                                 KeyCode::Char('a') | KeyCode::Char('A') => match self.modal {
+                                    ActiveModal::SecurityForensics => {
+                                        let scanned = self.scan_models_sync();
+                                        if let Some(m) = scanned.iter()
+                                            .find(|m| m.name.to_lowercase().contains("cyber"))
+                                            .or_else(|| scanned.iter().find(|m| m.name.to_lowercase().contains("lfm3")))
+                                        {
+                                            self.active_model_name = m.name.clone();
+                                            self.active_model_quant = m.quant.clone();
+                                            self.active_model_size = m.size_str.clone();
+                                            self.active_model_source = m.source.clone();
+                                            self.recompute_tier();
+                                            self.preload_active_model();
+                                        }
+                                        let summary = self.security_report.as_ref().map(|r| {
+                                            format!(
+                                                "Analyze this local Zero-Breach scan on {} ({}): {} artifacts scanned, {} IOCs loaded, {} findings. Suggest safe defensive triage & containment steps.",
+                                                r.platform, r.hardware, r.total_artifacts_scanned, r.iocs_loaded, r.findings.len()
+                                            )
+                                        }).unwrap_or_else(|| "Analyze my system security posture and suggest safe defensive triage steps.".to_string());
+                                        self.input = summary;
+                                        self.input_cursor = self.input.len();
+                                        self.modal = ActiveModal::None;
+                                        self.messages.push(ChatMessage {
+                                            role: "system".into(),
+                                            content: format!("[CyberRescue AI] Active model: {}. Press Enter to analyze scan or edit your security question.", self.active_model_name),
+                                            thinking: None,
+                                        });
+                                    }
                                     ActiveModal::SoupProfiler => {
                                         self.soup_show_adapters = !self.soup_show_adapters;
                                         self.soup_gallery_idx = 0;
@@ -2855,6 +2883,49 @@ impl TuiApp {
                                 if trimmed == "/security" || trimmed == "/forensics" || trimmed == "/threat" || trimmed == "/scan" {
                                     self.trigger_security_scan();
                                     self.modal = ActiveModal::SecurityForensics;
+                                    continue;
+                                }
+
+                                if trimmed == "/soup install" {
+                                    let venv_soup = PathBuf::from("synapses/soup/.venv/bin/soup");
+                                    if venv_soup.exists() {
+                                        self.messages.push(ChatMessage {
+                                            role: "system".into(),
+                                            content: "[Soup] Optional Soup training runtime is already installed at synapses/soup/.venv.".into(),
+                                            thinking: None,
+                                        });
+                                    } else {
+                                        self.messages.push(ChatMessage {
+                                            role: "system".into(),
+                                            content: "[Soup] Installing optional Soup runtime (venv + CPU PyTorch + soup-cli[train]) in background...".into(),
+                                            thinking: None,
+                                        });
+                                        std::thread::spawn(|| {
+                                            let _ = std::process::Command::new("sh")
+                                                .arg("-c")
+                                                .arg("python3 -m venv synapses/soup/.venv && synapses/soup/.venv/bin/pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && synapses/soup/.venv/bin/pip install --no-cache-dir 'soup-cli[train]'")
+                                                .status();
+                                        });
+                                    }
+                                    continue;
+                                }
+
+                                if trimmed == "/soup remove" {
+                                    let venv_dir = PathBuf::from("synapses/soup/.venv");
+                                    if venv_dir.exists() {
+                                        let _ = std::fs::remove_dir_all(&venv_dir);
+                                        self.messages.push(ChatMessage {
+                                            role: "system".into(),
+                                            content: "[Soup] Removed synapses/soup/.venv. Base Cynapse remains lean.".into(),
+                                            thinking: None,
+                                        });
+                                    } else {
+                                        self.messages.push(ChatMessage {
+                                            role: "system".into(),
+                                            content: "[Soup] Optional Soup runtime is not installed.".into(),
+                                            thinking: None,
+                                        });
+                                    }
                                     continue;
                                 }
 
@@ -5149,6 +5220,8 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     Span::raw(format!("Deep ({})  │  ", if self.security_deep_mode { "ON" } else { "OFF" })),
                     Span::styled(" [e] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                     Span::raw("Export  │  "),
+                    Span::styled(" [a] ", Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)),
+                    Span::raw("Ask CyberRescue AI  │  "),
                     Span::styled(" [Esc] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
                     Span::raw("Close"),
                 ];

@@ -121,11 +121,15 @@ echo "⚙️ Building Standalone Pure Rust Cynapse Binary (cargo build --release
 
 mkdir -p "${CYNAPSE_DIR}/models" "${CYNAPSE_DIR}/data" "${BIN_DIR}" "${INSTALL_ROOT}/models" "${INSTALL_ROOT}/persona" "${INSTALL_ROOT}/synapses"
 
-# Seed built-in Synapse extension packs
+# Seed built-in Synapse extension packs (excluding optional .venv so base install stays lightweight)
 if [ -d "${CYNAPSE_DIR}/synapses" ]; then
-    echo "   [→] Seeding Synapse tool extension packs (zero_breach, soup)..."
+    echo "   [→] Seeding lightweight Synapse manifests (use /soup install in TUI for training runtime)..."
     mkdir -p "${INSTALL_ROOT}/synapses"
-    cp -r "${CYNAPSE_DIR}/synapses/"* "${INSTALL_ROOT}/synapses/" 2>/dev/null || true
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -a --exclude='.venv' --exclude='__pycache__' "${CYNAPSE_DIR}/synapses/" "${INSTALL_ROOT}/synapses/"
+    else
+        (cd "${CYNAPSE_DIR}/synapses" && tar --exclude='.venv' --exclude='__pycache__' -cf - .) | (cd "${INSTALL_ROOT}/synapses" && tar -xf -)
+    fi
 fi
 
 (cd "${CYNAPSE_DIR}" && cargo build --release)
