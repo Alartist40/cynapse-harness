@@ -35,6 +35,10 @@ pub struct SubagentTask {
     pub result: Option<String>,
     pub started_at_epoch_ms: u64,
     pub finished_at_epoch_ms: Option<u64>,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 /// Announcement message emitted when a background subagent finishes.
@@ -116,6 +120,8 @@ impl SubagentManager {
             result: None,
             started_at_epoch_ms: Self::now_ms(),
             finished_at_epoch_ms: None,
+            scope: format!("{}:task-{}", bot_slug, id),
+            notes: Vec::new(),
         };
 
         if let Ok(mut tasks) = self.tasks.write() {
@@ -132,19 +138,42 @@ impl SubagentManager {
 
     /// Updates the execution status and optional result payload of a subagent task.
     pub fn update_status(&self, id: usize, status: SubagentStatus, result: Option<String>) {
+        let compacted = result.map(|r| crate::rtk::compact_command_output("subagent", &r));
         let is_terminal = matches!(status, SubagentStatus::Done | SubagentStatus::Failed(_) | SubagentStatus::Cancelled);
-        Self::append_task_log(id, &format!("STATUS: {:?} (result_len={})", status, result.as_ref().map(|r| r.len()).unwrap_or(0)));
+        Self::append_task_log(id, &format!("STATUS: {:?} (result_len={})", status, compacted.as_ref().map(|r| r.len()).unwrap_or(0)));
         if let Ok(mut tasks) = self.tasks.write() {
             if let Some(task) = tasks.get_mut(&id) {
                 task.status = status;
-                if result.is_some() {
-                    task.result = result;
+                if compacted.is_some() {
+                    task.result = compacted;
                 }
                 if is_terminal {
                     task.finished_at_epoch_ms = Some(Self::now_ms());
                 }
             }
         }
+    }
+
+    /// Append a scoped working note to an isolated subagent task (Octogent pattern).
+    pub fn add_note(&self, id: usize, note: &str) {
+        if let Ok(mut tasks) = self.tasks.write() {
+            if let Some(task) = tasks.get_mut(&id) {
+                task.notes.push(note.to_string());
+                Self::append_task_log(id, &format!("NOTE [{}]: {}", task.scope, note));
+            }
+        }
+    }
+
+    /// Return isolated scope + accumulated notes for a single subagent task.
+    pub fn get_scoped_context(&self, id: usize) -> Option<String> {
+        let tasks = self.tasks.read().ok()?;
+        let task = tasks.get(&id)?;
+        let notes = if task.notes.is_empty() {
+            "(none)".to_string()
+        } else {
+            task.notes.join("\n- ")
+        };
+        Some(format!("Scope: {}\nTask: {}\nNotes:\n- {}", task.scope, task.task, notes))
     }
 
     /// Signals cancellation to a running subagent task by ID.

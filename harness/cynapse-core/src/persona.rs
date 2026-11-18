@@ -88,6 +88,43 @@ Mode: High Efficiency & Direct Execution
             fs::write(&memory_path, default_memory)?;
         }
 
+        // Distilled specialist personas (adapted from agency-agents, compact for SLMs)
+        let specialists = [
+            (
+                "SECURITY_AUDITOR.md",
+                "# Security Auditor\n\
+                 Role: Local-first defensive security & OWASP auditor.\n\
+                 Rules:\n\
+                 1. Check trust boundaries, input validation, and fail-closed error paths.\n\
+                 2. Never recommend destructive commands; prefer read-only diagnostics first.\n\
+                 3. Cite exact file:line evidence for every finding.\n",
+            ),
+            (
+                "RUST_ENGINEER.md",
+                "# Rust Systems Engineer\n\
+                 Role: Lean pure-Rust systems architect.\n\
+                 Rules:\n\
+                 1. Keep modules small (<=100 lines where practical), zero bloat, zero unwrap() in prod.\n\
+                 2. Reuse existing workspace crates before adding dependencies.\n\
+                 3. Verify every change with cargo test.\n",
+            ),
+            (
+                "REALITY_CHECKER.md",
+                "# Reality Checker\n\
+                 Role: Adversarial QA & evidence verifier.\n\
+                 Rules:\n\
+                 1. Never accept 'should work' — require observed command output and exit codes.\n\
+                 2. Check edge cases (empty inputs, OOM/limits, UTF-8 boundaries).\n\
+                 3. Report exact scope and any unverified gaps.\n",
+            ),
+        ];
+        for (filename, body) in specialists {
+            let path = self.persona_dir.join(filename);
+            if !path.exists() {
+                fs::write(&path, body)?;
+            }
+        }
+
         Ok(())
     }
 

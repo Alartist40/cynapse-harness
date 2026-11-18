@@ -208,37 +208,48 @@ impl GalaxySystem {
         self.nodes.push(node);
     }
 
-    /// Step hierarchical orbital simulation forward by dt seconds.
+    /// Step Dendrite Brainstem -> Spine -> Synaptic Filament simulation forward by dt seconds.
     pub fn update(&mut self, dt: f32) {
         if self.sim_paused {
             return;
         }
         self.time += dt;
 
-        // Pass 1: Update Central Sun, Primary Language Planets, and Outer Primary Categories
         let mut parent_positions: std::collections::HashMap<String, [f32; 3]> =
             std::collections::HashMap::with_capacity(64);
 
+        let spine_count = self
+            .nodes
+            .iter()
+            .filter(|n| n.entity_type == EntityType::Planet)
+            .count()
+            .max(1);
+        let mut spine_idx = 0usize;
+
+        // Pass 1: Brainstem root at base, Spinal Nerve Hubs rising vertically along the central axis
         for node in &mut self.nodes {
             match node.entity_type {
                 EntityType::Sun => {
-                    node.pos = [0.0, 0.0, 0.0];
-                    parent_positions.insert(node.id.clone(), [0.0, 0.0, 0.0]);
+                    let pos = [0.0, -24.0, 0.0];
+                    node.pos = pos;
+                    parent_positions.insert(node.id.clone(), pos);
                 }
                 EntityType::Planet => {
-                    let angle = node.phase + self.time * node.orbit_speed;
-                    let x = node.base_radius * angle.cos();
-                    let z = node.base_radius * angle.sin();
-                    let y = (node.base_radius * 0.18) * (angle * 1.5).sin() * node.inclination.sin();
+                    let t = spine_idx as f32 / spine_count as f32;
+                    spine_idx += 1;
+                    let y = -16.0 + t * 38.0;
+                    let sway = (self.time * 0.5 + node.phase).sin() * 1.4;
+                    let x = sway + node.phase.cos() * 2.5;
+                    let z = node.phase.sin() * 2.5;
                     let pos = [x, y, z];
                     node.pos = pos;
                     parent_positions.insert(node.id.clone(), pos);
                 }
                 EntityType::Asteroid if node.parent_id.is_none() => {
-                    let angle = node.phase + self.time * node.orbit_speed;
-                    let x = node.base_radius * angle.cos();
-                    let z = node.base_radius * angle.sin();
-                    let y = (node.base_radius * 0.12) * (angle * 1.2).sin() * node.inclination.sin();
+                    let y = -14.0 + (node.phase % 6.28) * 5.5;
+                    let reach = (node.base_radius * 0.45).max(8.0);
+                    let x = reach * node.phase.cos();
+                    let z = reach * node.phase.sin();
                     let pos = [x, y, z];
                     node.pos = pos;
                     parent_positions.insert(node.id.clone(), pos);
@@ -247,7 +258,7 @@ impl GalaxySystem {
             }
         }
 
-        // Pass 2: Update Translation Moons and Category Particle Rings relative to their parent position
+        // Pass 2: Synaptic Dendrites branching outward from each Spinal Nerve Hub with gentle neural pulse
         for node in &mut self.nodes {
             if node.entity_type == EntityType::Moon
                 || (node.entity_type == EntityType::Asteroid && node.parent_id.is_some())
@@ -258,10 +269,11 @@ impl GalaxySystem {
                     .and_then(|pid| parent_positions.get(pid).copied())
                     .unwrap_or([0.0, 0.0, 0.0]);
 
-                let angle = node.phase + self.time * node.orbit_speed;
-                let rel_x = node.base_radius * angle.cos();
-                let rel_z = node.base_radius * angle.sin();
-                let rel_y = 0.22 * (angle * 2.0).sin() * node.inclination;
+                let pulse = 1.0 + 0.06 * (self.time * 1.8 + node.phase).sin();
+                let reach = (node.base_radius * 0.55 + 4.0) * pulse;
+                let rel_x = reach * node.phase.cos();
+                let rel_z = reach * node.phase.sin();
+                let rel_y = (node.inclination.sin() * 4.5) + 0.35 * (self.time + node.phase).sin();
 
                 node.pos = [
                     parent_pos[0] + rel_x,

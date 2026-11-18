@@ -14,6 +14,7 @@ pub mod detect;
 /// accumulator FMA splits) so two runs on the same model produce
 /// bit-identical logits regardless of machine or thread count.
 pub mod deterministic;
+pub mod expert_stream;
 
 /// Background safety monitor — observes CPU temp/RSS and prints warnings
 /// to stderr.  Never throttles execution; pure advisory.

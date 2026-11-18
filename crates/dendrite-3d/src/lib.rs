@@ -59,17 +59,16 @@ mod tests {
         system.add_node(planet);
         system.add_node(moon);
 
-        // Initial positions at time 0
+        // Initial Brainstem -> Spine -> Dendrite positions at time 0
         system.update(0.0);
-        assert_eq!(system.nodes[0].pos, [0.0, 0.0, 0.0]);
-        assert!((system.nodes[1].pos[0] - 10.0).abs() < 1e-4);
-        assert!((system.nodes[2].pos[0] - 12.0).abs() < 1e-4);
+        assert_eq!(system.nodes[0].pos, [0.0, -24.0, 0.0]);
+        assert!((system.nodes[1].pos[1] - (-16.0)).abs() < 1e-4);
+        assert!((system.nodes[2].pos[0] - system.nodes[1].pos[0]).abs() > 4.0);
 
-        // Step simulation forward by PI/2
+        // Step simulation forward: Brainstem remains anchored, Spine/Dendrites pulse gently
         system.update(std::f32::consts::PI / 2.0);
-        assert_eq!(system.nodes[0].pos, [0.0, 0.0, 0.0]);
-        assert!(system.nodes[1].pos[0].abs() < 0.1);
-        assert!((system.nodes[1].pos[2] - 10.0).abs() < 0.1);
+        assert_eq!(system.nodes[0].pos, [0.0, -24.0, 0.0]);
+        assert!((system.nodes[1].pos[1] - (-16.0)).abs() < 1e-4);
     }
 
     #[test]

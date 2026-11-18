@@ -207,12 +207,31 @@ impl DendriteStore {
         Ok(())
     }
 
+    /// Mindcorpus-inspired deterministic auto-tagging on save (zero LLM overhead).
+    fn auto_synthesize_tags(title: &str, content: &str, existing: &[String]) -> Vec<String> {
+        let mut tags = existing.to_vec();
+        let hay = format!("{} {}", title, content).to_lowercase();
+        let rules = [
+            ("security", ["cve", "forensic", "ioc", "malware", "firewall", "auth", "ssh", "owasp"].as_slice()),
+            ("rust", ["cargo", "rustc", "crate", "borrow", "tokio", ".rs"].as_slice()),
+            ("model", ["gguf", "lfm3", "lora", "quantize", "tok/s", "llama"].as_slice()),
+            ("architecture", ["spec.md", "gates.md", "dendrite", "leafcutter", "synapse"].as_slice()),
+        ];
+        for (tag, kws) in rules {
+            if kws.iter().any(|k| hay.contains(k)) && !tags.iter().any(|t| t == tag) {
+                tags.push(tag.to_string());
+            }
+        }
+        tags
+    }
+
     /// Upsert a node into SQLite under generational protection.
     /// If node has a `topic_key` that already exists in SQLite, it updates that record in place
     /// and increments its `revision_count`, preventing memory fragmentation.
     pub fn save(&self, node: &Node) -> Result<()> {
         self.fence.check()?;
-        let tags = serde_json::to_string(&node.tags)?;
+        let enriched_tags = Self::auto_synthesize_tags(&node.title, &node.content, &node.tags);
+        let tags = serde_json::to_string(&enriched_tags)?;
         let links = serde_json::to_string(&node.links)?;
         let backlinks = serde_json::to_string(&node.backlinks)?;
         let supersedes = serde_json::to_string(&node.supersedes)?;

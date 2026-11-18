@@ -11,16 +11,19 @@ pub mod bots;
 pub mod compressor;
 pub mod doctor;
 pub mod downloader;
+pub mod eval;
 pub mod forensics;
 pub mod gates;
 pub mod offline_agent;
 pub mod persona;
 pub mod power;
 pub mod receipts;
+pub mod rtk;
 pub mod sbc_cluster;
 pub mod security;
 pub mod session;
 pub mod skills;
+pub mod spec;
 pub mod subagent;
 pub mod synapse;
 pub mod undo;
@@ -361,7 +364,7 @@ pub fn execute_tool(name: &str, arg1: &str, arg2: Option<&str>) -> Result<String
             if matches.is_empty() {
                 Ok(format!("No matches found for pattern '{}' in {}", pattern, dir_path))
             } else {
-                Ok(matches.join("\n"))
+                Ok(rtk::compact_command_output("rg", &matches.join("\n")))
             }
         }
         "execute_command" => {
@@ -391,7 +394,8 @@ pub fn execute_tool(name: &str, arg1: &str, arg2: Option<&str>) -> Result<String
                     let output = child.wait_with_output()?;
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Ok(format!("Exit Status: {}\n{}{}", status, stdout, stderr));
+                    let raw_output = format!("Exit Status: {}\n{}{}", status, stdout, stderr);
+                    return Ok(rtk::compact_command_output(trimmed, &raw_output));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }

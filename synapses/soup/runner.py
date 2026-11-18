@@ -168,6 +168,24 @@ def handle_synth(args: dict) -> None:
     }, indent=2))
 
 
+def handle_quantize(args: dict) -> None:
+    inp = args.get("input", "models/LFM3-1.7B-CyberRescue-F16.gguf")
+    out = args.get("output", "models/LFM3-1.7B-CyberRescue-Q4_K_M.gguf")
+    qtype = args.get("quant", "Q4_K_M").upper()
+    qbin = os.path.join(REPO_ROOT, "bin", "llama-quantize")
+    if not os.path.exists(qbin):
+        print(json.dumps({"status": "ERROR", "error": f"llama-quantize not found at {qbin}. Run scripts/build_llama_server.sh"}))
+        return
+    proc = subprocess.run([qbin, inp, out, qtype], cwd=REPO_ROOT, capture_output=True, text=True)
+    print(json.dumps({
+        "status": "SUCCESS" if proc.returncode == 0 else "ERROR",
+        "returncode": proc.returncode,
+        "output": out,
+        "quant": qtype,
+        "stderr": proc.stderr.strip(),
+    }, indent=2))
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No action specified"}))
@@ -187,6 +205,7 @@ def main() -> None:
         "data_doctor": handle_data_doctor,
         "train": handle_train,
         "export": handle_export,
+        "quantize": handle_quantize,
         "synth": handle_synth,
     }
     handler = handlers.get(action)

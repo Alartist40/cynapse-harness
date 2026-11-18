@@ -2319,7 +2319,7 @@ impl TuiApp {
                                     ActiveModal::CommandPalette => {
                                         const PALETTE_COMMANDS: &[&str] = &[
                                             "/help", "/dendrite", "/theme", "/model", "/session", "/doctor", "/security", "/synapse",
-                                            "/soup", "/spec", "/rewind", "/fork", "/bots", "/persona", "/undo", "/clear", "/exit"
+                                            "/soup", "/spec", "/sdd", "/eval", "/rewind", "/fork", "/bots", "/persona", "/undo", "/clear", "/exit"
                                         ];
                                         let sel = PALETTE_COMMANDS[self.palette_selected_idx.min(PALETTE_COMMANDS.len() - 1)];
                                         self.modal = ActiveModal::None;
@@ -2344,6 +2344,14 @@ impl TuiApp {
                                                     content: format!("Speculative Prompt Lookup Decoding is now: {}", if self.speculative_decoding_enabled { "ENABLED (Accelerated n-gram drafting)" } else { "DISABLED" }),
                                                     thinking: None,
                                                 });
+                                            }
+                                            "/sdd" => {
+                                                self.input = "/sdd ".into();
+                                                self.input_cursor = self.input.len();
+                                            }
+                                            "/eval" => {
+                                                self.input = "/eval ".into();
+                                                self.input_cursor = self.input.len();
                                             }
                                             "/help" => self.modal = ActiveModal::Help,
                                             "/dendrite" => self.modal = ActiveModal::MemoryGraph,
@@ -2750,6 +2758,62 @@ impl TuiApp {
                                         content: format!("Speculative Prompt Lookup Decoding is now: {}{}", status_str, acc_str),
                                         thinking: None,
                                     });
+                                    continue;
+                                }
+
+                                if trimmed == "/eval" || trimmed.starts_with("/eval ") {
+                                    let args: Vec<&str> = trimmed.split_whitespace().skip(1).collect();
+                                    if args.len() < 2 {
+                                        self.messages.push(ChatMessage {
+                                            role: "system".into(),
+                                            content: "Usage: /eval <model_a.gguf> <model_b.gguf> (runs sequentially to protect RAM and logs to data/eval_history.json)".into(),
+                                            thinking: None,
+                                        });
+                                    } else {
+                                        let m_a = self.models_dir.join(args[0]);
+                                        let m_b = self.models_dir.join(args[1]);
+                                        let cli = cynapse_core::eval::resolve_llama_cli();
+                                        let hist = PathBuf::from("data/eval_history.json");
+                                        self.messages.push(ChatMessage {
+                                            role: "system".into(),
+                                            content: format!("[Eval] Running sequential A/B benchmark: {} -> {} (saving to data/eval_history.json)...", args[0], args[1]),
+                                            thinking: None,
+                                        });
+                                        std::thread::spawn(move || {
+                                            let _ = cynapse_core::eval::run_sequential_eval(&cli, &m_a, &m_b, &hist, 128);
+                                        });
+                                    }
+                                    continue;
+                                }
+
+                                if trimmed == "/sdd" || trimmed.starts_with("/sdd ") || trimmed == "/specify" || trimmed.starts_with("/specify ") {
+                                    let goal = trimmed
+                                        .trim_start_matches("/specify")
+                                        .trim_start_matches("/sdd")
+                                        .trim();
+                                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                                    match cynapse_core::spec::scaffold_spec(&cwd, goal) {
+                                        Ok((spec_p, gates_p)) => {
+                                            self.input = format!(
+                                                "Follow SPEC.md ({}) and GATES.md ({}). Specify -> Plan -> Implement without guessing.",
+                                                spec_p.display(),
+                                                gates_p.display()
+                                            );
+                                            self.input_cursor = self.input.len();
+                                            self.messages.push(ChatMessage {
+                                                role: "system".into(),
+                                                content: format!("[SDD] Scaffolded {} and {}. Press Enter to start spec-driven implementation.", spec_p.display(), gates_p.display()),
+                                                thinking: None,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            self.messages.push(ChatMessage {
+                                                role: "system".into(),
+                                                content: format!("[SDD] Failed to scaffold spec: {}", e),
+                                                thinking: None,
+                                            });
+                                        }
+                                    }
                                     continue;
                                 }
 
@@ -5938,7 +6002,10 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     ("/doctor", "System self-healing diagnostics"),
                     ("/security", "Zero-Breach digital forensics threat scanner"),
                     ("/synapse", "Synapse modular tool extension hub"),
+                    ("/soup", "Soup LoRA training & GGUF export profiler"),
                     ("/spec", "Toggle n-gram speculative prompt lookup"),
+                    ("/sdd", "Scaffold SPEC.md + GATES.md (Spec-Driven Dev)"),
+                    ("/eval", "Sequential A/B benchmark between two GGUF models"),
                     ("/rewind", "Rewind last conversational turn"),
                     ("/fork", "Branch session into new fork"),
                     ("/bots", "Bot profile catalog"),
