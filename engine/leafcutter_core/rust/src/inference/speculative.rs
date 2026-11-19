@@ -71,22 +71,49 @@ impl SpeculativeHead {
         drafts
     }
 
-    /// Verify draft tokens against the main model's logits.
-    /// Returns (accepted_count, next_token) where accepted_count is how many
-    /// draft tokens were accepted, and next_token is the final sampled token.
+    /// Verify draft tokens against a single position's main logits (greedy check).
     pub fn verify(
         &self,
-        _draft_tokens: &[usize],
-        _main_logits: &[f32],
+        draft_tokens: &[usize],
+        main_logits: &[f32],
         _temperature: f32,
     ) -> (usize, usize) {
-        // Full verification requires running the main model forward for each
-        // draft position and comparing distributions.  That's not wired up
-        // here yet, so rather than pretend to verify (the previous stub
-        // always accepted 0 drafts while still cost a draft pass), we now
-        // report a disabled status — the caller should fall back to plain
-        // greedy/contrastive sampling.
-        (0, 0)
+        if draft_tokens.is_empty() || main_logits.is_empty() {
+            return (0, 0);
+        }
+        let target = greedy_sample(main_logits);
+        if draft_tokens[0] == target {
+            (1, target)
+        } else {
+            (0, target)
+        }
+    }
+
+    /// Verify a full draft sequence against per-position target logits.
+    /// Returns `(accepted_count, next_token)` where `next_token` is the first
+    /// corrected token (or bonus token if all drafts matched).
+    pub fn verify_batch(
+        &self,
+        draft_tokens: &[usize],
+        target_logits: &[&[f32]],
+    ) -> (usize, usize) {
+        let mut accepted = 0usize;
+        for (i, &draft_tok) in draft_tokens.iter().enumerate() {
+            let Some(logits) = target_logits.get(i) else {
+                break;
+            };
+            let target_tok = greedy_sample(logits);
+            if draft_tok == target_tok {
+                accepted += 1;
+            } else {
+                return (accepted, target_tok);
+            }
+        }
+        let bonus = target_logits
+            .get(accepted)
+            .map(|l| greedy_sample(l))
+            .unwrap_or(0);
+        (accepted, bonus)
     }
 }
 
@@ -164,6 +191,75 @@ pub fn find_prompt_lookup_draft(context: &[usize], ngram_size: usize, max_draft:
     Vec::new()
 }
 
+/// Multi-length suffix lookup (tries `max_ngram` down to `min_ngram` for highest precision).
+pub fn find_best_suffix_draft(
+    context: &[usize],
+    min_ngram: usize,
+    max_ngram: usize,
+    max_draft: usize,
+) -> Vec<usize> {
+    let min_n = min_ngram.max(1);
+    let max_n = max_ngram.max(min_n);
+    for n in (min_n..=max_n).rev() {
+        let draft = find_prompt_lookup_draft(context, n, max_draft);
+        if !draft.is_empty() {
+            return draft;
+        }
+    }
+    Vec::new()
+}
+
+/// Adaptive speculation controller (`strata/engine/src/spec/controller.cpp`).
+/// Tracks EMA acceptance rate and scales `current_gamma` dynamically, pausing
+/// speculation during low-acceptance stretches.
+#[derive(Debug, Clone)]
+pub struct AdaptiveSpecController {
+    pub current_gamma: usize,
+    pub min_gamma: usize,
+    pub max_gamma: usize,
+    pub ema_accept: f32,
+    cooldown: usize,
+}
+
+impl AdaptiveSpecController {
+    pub fn new(initial_gamma: usize, min_gamma: usize, max_gamma: usize) -> Self {
+        let min_g = min_gamma.max(1);
+        let max_g = max_gamma.max(min_g);
+        Self {
+            current_gamma: initial_gamma.clamp(min_g, max_g),
+            min_gamma: min_g,
+            max_gamma: max_g,
+            ema_accept: 0.5,
+            cooldown: 0,
+        }
+    }
+
+    pub fn should_speculate(&mut self) -> bool {
+        if self.cooldown > 0 {
+            self.cooldown -= 1;
+            return false;
+        }
+        true
+    }
+
+    pub fn record_outcome(&mut self, drafted: usize, accepted: usize) {
+        if drafted == 0 {
+            return;
+        }
+        let rate = (accepted as f32 / drafted as f32).clamp(0.0, 1.0);
+        self.ema_accept = 0.7 * self.ema_accept + 0.3 * rate;
+        if self.ema_accept > 0.65 && self.current_gamma < self.max_gamma {
+            self.current_gamma += 1;
+        } else if self.ema_accept < 0.25 {
+            if self.current_gamma > self.min_gamma {
+                self.current_gamma -= 1;
+            } else {
+                self.cooldown = 4;
+            }
+        }
+    }
+}
+
 /// Greedy sample argmax from logits
 fn greedy_sample(logits: &[f32]) -> usize {
     logits.iter()
@@ -228,5 +324,32 @@ mod tests {
         let context = vec![10, 20];
         let drafts = find_prompt_lookup_draft(&context, 3, 3);
         assert!(drafts.is_empty());
+    }
+
+    #[test]
+    fn test_adaptive_suffix_spec_controller_and_verify_batch() {
+        let context = vec![1, 2, 3, 4, 5, 6, 7, 2, 3, 4, 5];
+        let best = find_best_suffix_draft(&context, 2, 5, 3);
+        assert_eq!(best, vec![6, 7]);
+
+        let mut weights = HashMap::new();
+        weights.insert("nextn.eh_proj.weight".to_string(), Tensor::from_vec(vec![0.0; 4], vec![2, 2]));
+        let head = SpeculativeHead::from_weights(&weights, 3).unwrap();
+        let l0 = [0.1, 0.9, 0.0]; // argmax 1
+        let l1 = [0.0, 0.2, 0.8]; // argmax 2
+        let l2 = [0.9, 0.1, 0.0]; // argmax 0
+        let (acc, next) = head.verify_batch(&[1, 99], &[&l0, &l1, &l2]);
+        assert_eq!(acc, 1);
+        assert_eq!(next, 2);
+
+        let mut ctrl = AdaptiveSpecController::new(2, 1, 5);
+        for _ in 0..4 {
+            ctrl.record_outcome(3, 3);
+        }
+        assert!(ctrl.current_gamma > 2);
+        for _ in 0..8 {
+            ctrl.record_outcome(3, 0);
+        }
+        assert!(!ctrl.should_speculate());
     }
 }

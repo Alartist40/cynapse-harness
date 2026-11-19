@@ -10,6 +10,8 @@
 
 pub mod ssm_state;
 pub mod deltanet_state;
+pub mod kv_polar;
+pub mod pin_pool;
 
 use crate::model::tensor::Tensor;
 use std::collections::HashMap;

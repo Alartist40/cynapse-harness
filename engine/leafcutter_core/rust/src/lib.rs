@@ -15,6 +15,7 @@ pub mod detect;
 /// bit-identical logits regardless of machine or thread count.
 pub mod deterministic;
 pub mod expert_stream;
+pub mod trunk_cache;
 
 /// Background safety monitor — observes CPU temp/RSS and prints warnings
 /// to stderr.  Never throttles execution; pure advisory.
