@@ -13,6 +13,7 @@ use cynapse_memory::store::DendriteStore;
 
 pub mod memory_render;
 pub mod app;
+pub mod harness_ui;
 pub mod terminal;
 pub mod theme;
 

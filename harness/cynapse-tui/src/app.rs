@@ -363,6 +363,13 @@ pub struct TuiApp {
     pub history_idx: Option<usize>,
     pub auto_route: bool,
     pub last_activity_at: std::time::Instant,
+    pub show_tool_details: bool,
+    pub show_context_drawer: bool,
+    pub todo_items: Vec<(bool, String)>,
+    pub task_queue: std::collections::VecDeque<String>,
+    pub at_picker_idx: usize,
+    pub drawer_git_status: Vec<String>,
+    pub last_tool_output: String,
     pub finalization_inflight: bool,
     pub turn_verified: bool,
 
@@ -550,6 +557,13 @@ impl TuiApp {
             history_idx: None,
             auto_route: false,
             last_activity_at: std::time::Instant::now(),
+            show_tool_details: false,
+            show_context_drawer: false,
+            todo_items: Vec::new(),
+            task_queue: std::collections::VecDeque::new(),
+            at_picker_idx: 0,
+            drawer_git_status: Vec::new(),
+            last_tool_output: String::new(),
             update_notification: {
                 let slot = Arc::new(std::sync::Mutex::new(None));
                 let worker_slot = slot.clone();
@@ -1453,6 +1467,19 @@ impl TuiApp {
                         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                             self.save_current_session();
                             break;
+                        }
+
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+                            self.show_tool_details = !self.show_tool_details;
+                            continue;
+                        }
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
+                            self.show_context_drawer = !self.show_context_drawer;
+                            if self.show_context_drawer {
+                                self.drawer_git_status = std::process::Command::new("git").args(["status", "-s"]).output()
+                                    .ok().map(|o| String::from_utf8_lossy(&o.stdout).lines().map(String::from).collect()).unwrap_or_default();
+                            }
+                            continue;
                         }
 
                         // Global Paste Shortcut (Ctrl+V)
@@ -2621,7 +2648,17 @@ impl TuiApp {
                         // General Input Field & Viewport Navigation Handling
                         match key.code {
                             KeyCode::Tab => {
-                                // Typing '/' opens command palette; Tab does not hijack chat focus
+                                if let Some((prefix, at_q)) = self.input.rsplit_once('@') {
+                                    if !at_q.contains(' ') && !self.input.starts_with('/') {
+                                        let matches = crate::harness_ui::fuzzy_file_matches(at_q, 6);
+                                        if let Some(picked) = matches.get(self.at_picker_idx.min(matches.len().saturating_sub(1))) {
+                                            self.input = format!("{}{} ", prefix, picked);
+                                            self.input_cursor = self.input.len();
+                                            self.at_picker_idx = 0;
+                                            continue;
+                                        }
+                                    }
+                                }
                             }
                             KeyCode::F(6) => {
                                 self.speculative_decoding_enabled = !self.speculative_decoding_enabled;
@@ -2746,6 +2783,51 @@ impl TuiApp {
                                 }
 
                                 // Execute Slash Commands
+                                if trimmed == "/todo" || trimmed.starts_with("/todo ") {
+                                    let arg = trimmed.strip_prefix("/todo").unwrap_or("").trim();
+                                    if arg == "clear" {
+                                        self.todo_items.clear();
+                                    } else if let Some(rest) = arg.strip_prefix("add ") {
+                                        if !rest.trim().is_empty() {
+                                            self.todo_items.push((false, rest.trim().to_string()));
+                                        }
+                                    } else if let Some(num) = arg.strip_prefix("done ").and_then(|s| s.trim().parse::<usize>().ok()) {
+                                        if let Some(item) = self.todo_items.get_mut(num.saturating_sub(1)) {
+                                            item.0 = true;
+                                        }
+                                    } else {
+                                        let list = if self.todo_items.is_empty() {
+                                            "No /todo items. Use `/todo add <task>`, `/todo done <N>`, `/todo clear`.".to_string()
+                                        } else {
+                                            self.todo_items.iter().enumerate()
+                                                .map(|(i, (d, t))| format!("{} {}. {}", if *d { "[✓]" } else { "[●]" }, i + 1, t))
+                                                .collect::<Vec<_>>().join("\n")
+                                        };
+                                        self.messages.push(ChatMessage { role: "system".into(), content: list, thinking: None });
+                                    }
+                                    continue;
+                                }
+
+                                if trimmed == "/queue" || trimmed.starts_with("/queue ") {
+                                    let arg = trimmed.strip_prefix("/queue").unwrap_or("").trim();
+                                    if arg == "clear" {
+                                        self.task_queue.clear();
+                                    } else if let Some(rest) = arg.strip_prefix("add ") {
+                                        if !rest.trim().is_empty() {
+                                            self.task_queue.push_back(rest.trim().to_string());
+                                        }
+                                    } else if arg == "run" {
+                                        if let Some(next_task) = self.task_queue.pop_front() {
+                                            self.input = next_task;
+                                            self.input_cursor = self.input.len();
+                                        }
+                                    } else {
+                                        let msg = format!("Queue ({} pending). Use `/queue add <task>`, `/queue run`, `/queue clear`.", self.task_queue.len());
+                                        self.messages.push(ChatMessage { role: "system".into(), content: msg, thinking: None });
+                                    }
+                                    continue;
+                                }
+
                                 if trimmed == "/auto" {
                                     self.auto_route = !self.auto_route;
                                     self.messages.push(ChatMessage {
@@ -4778,7 +4860,8 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                         chat_lines.push(Line::from(""));
                     }
                     "system" => {
-                        chat_lines.push(Line::from(Span::styled(format!("Info: {}", msg.content), t.system_text())));
+                        let shown = crate::harness_ui::format_tool_summary(&msg.content, self.show_tool_details);
+                        chat_lines.push(Line::from(Span::styled(format!("Info: {}", shown), t.system_text())));
                         chat_lines.push(Line::from(""));
                     }
                     _ => {
@@ -4847,11 +4930,44 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
             " Conversation Viewport (PgUp/PgDn to scroll) ".to_string()
         };
 
+        let (chat_area, drawer_area) = if self.show_context_drawer && screen_w >= 115 {
+            let split = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Min(45), Constraint::Length(34)])
+                .split(viewport_area);
+            (split[0], Some(split[1]))
+        } else {
+            (viewport_area, None)
+        };
+
         let viewport = Paragraph::new(chat_lines)
             .wrap(Wrap { trim: false })
             .scroll((effective_scroll, 0))
             .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(scroll_title).border_style(t.border_style()));
-        f.render_widget(viewport, viewport_area);
+        f.render_widget(viewport, chat_area);
+
+        if let Some(da) = drawer_area {
+            crate::harness_ui::render_context_drawer(
+                f,
+                da,
+                &self.drawer_git_status,
+                &self.last_tool_output,
+                self.task_queue.len(),
+                t,
+            );
+        }
+
+        if !self.todo_items.is_empty() && main_chunks[1].height > 8 {
+            let todo_h = (self.todo_items.len().min(3) as u16) + 2;
+            let todo_rect = Rect::new(
+                main_chunks[2].x,
+                main_chunks[2].y.saturating_sub(todo_h),
+                main_chunks[2].width,
+                todo_h,
+            );
+            f.render_widget(Clear, todo_rect);
+            crate::harness_ui::render_todo_strip(f, todo_rect, &self.todo_items, t);
+        }
 
         // 3. Bottom Prompt Input Bar (Dynamic Height & Multi-line Wrap with '・ ' prefix)
         let input_text = vec![Line::from(vec![
@@ -4866,6 +4982,12 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
 
         // Render terminal blinking cursor at input cursor position (multi-line aware)
         if self.modal == ActiveModal::None {
+            if let Some((_, at_q)) = self.input.rsplit_once('@') {
+                if !at_q.contains(' ') && !self.input.starts_with('/') {
+                    let matches = crate::harness_ui::fuzzy_file_matches(at_q, 6);
+                    crate::harness_ui::render_at_picker(f, main_chunks[2], &matches, self.at_picker_idx.min(matches.len().saturating_sub(1)), t);
+                }
+            }
             let input_area = main_chunks[2];
             let inner_w = input_area.width.saturating_sub(2) as usize;
             if inner_w > 0 {
