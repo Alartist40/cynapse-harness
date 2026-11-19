@@ -126,6 +126,20 @@ struct HfTreeItem {
     path: String,
 }
 
+fn safe_filename_from_url(url: &str) -> String {
+    let base = url.split(['?', '#']).next().unwrap_or(url);
+    let name = Path::new(base)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .replace(['/', '\\'], "_");
+    if name.is_empty() || name == "." || name == ".." {
+        "model.gguf".to_string()
+    } else {
+        name
+    }
+}
+
 /// Resolves a custom HuggingFace repo/URL string and quantization into a direct download URL and filename.
 /// Uses HuggingFace API repo tree resolution to dynamically locate exact GGUF filenames inside repos.
 pub async fn resolve_hf_download_url_async(input: &str, quant: &str) -> (String, String) {
@@ -151,7 +165,7 @@ pub async fn resolve_hf_download_url_async(input: &str, quant: &str) -> (String,
         } else {
             format!("https://huggingface.co/{}", direct_url)
         };
-        let filename = Path::new(&url).file_name().unwrap_or_default().to_string_lossy().to_string();
+        let filename = safe_filename_from_url(&url);
         return (url, filename);
     }
 
@@ -223,7 +237,7 @@ pub fn resolve_hf_download_url(input: &str, quant: &str) -> (String, String) {
         } else {
             format!("https://huggingface.co/{}", direct_url)
         };
-        let filename = Path::new(&url).file_name().unwrap_or_default().to_string_lossy().to_string();
+        let filename = safe_filename_from_url(&url);
         (url, filename)
     } else {
         let repo_path = clean

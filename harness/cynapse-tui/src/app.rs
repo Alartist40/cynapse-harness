@@ -4072,7 +4072,7 @@ impl TuiApp {
                     if path.is_file() {
                         if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                             if ext == "gguf" || ext == "safetensors" || ext == "bin" {
-                                let filename = path.file_name().unwrap().to_string_lossy();
+                                let filename = path.file_name().unwrap_or_default().to_string_lossy();
                                 if filename == "README.md" || items.iter().any(|i: &ModelItem| i.name == filename) {
                                     continue;
                                 }
