@@ -290,14 +290,18 @@ impl LlamaServerDaemon {
             .arg(&ngl)
             .arg("-t")
             .arg(&threads)
+            .arg("-tb")
+            .arg(&threads)
+            .arg("-b")
+            .arg("512")
+            .arg("-ub")
+            .arg("256")
             .arg("--flash-attn")
             .arg("auto")
             .arg("--cache-type-k")
-            .arg("q8_0")
+            .arg("f16")
             .arg("--cache-type-v")
-            .arg("q8_0")
-            .arg("--slot-save-path")
-            .arg(&kv_dir)
+            .arg("f16")
             .arg("--parallel")
             .arg("1")
             .arg("--ctx-size")
@@ -306,6 +310,9 @@ impl LlamaServerDaemon {
             .arg("--jinja")
             .stdout(out_stdio)
             .stderr(err_stdio);
+        if std::env::var("CYNAPSE_KV_DISK").as_deref() == Ok("1") {
+            cmd.arg("--slot-save-path").arg(&kv_dir);
+        }
 
         // Set LD_LIBRARY_PATH to ensure Cynapse libraries and acceleration backends resolve
         let mut ld_dirs = Vec::new();
