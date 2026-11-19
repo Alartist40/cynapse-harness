@@ -160,15 +160,10 @@ fn validate_safe_path(p_str: &str, for_write: bool) -> Result<PathBuf> {
         normalized.clone()
     };
 
-    let p_str_clean = normalized.to_string_lossy();
-    let resolved_str = resolved.to_string_lossy();
+    let p_str_clean = normalized.to_string_lossy().to_lowercase();
+    let resolved_str = resolved.to_string_lossy().to_lowercase();
 
-    let sensitive_patterns = [
-        "/etc/shadow", "/etc/passwd", "/etc/sudoers", "/etc/master.passwd",
-        "/.ssh", "/root", "/proc/kcore", "/dev/mem", "/dev/kmem",
-    ];
-
-    for sensitive in &sensitive_patterns {
+    for sensitive in security::SENSITIVE_PATH_PATTERNS {
         if p_str_clean.contains(sensitive) || resolved_str.contains(sensitive) {
             bail!("Access denied: path '{}' accesses sensitive system resources.", p_str);
         }
@@ -369,12 +364,8 @@ pub fn execute_tool(name: &str, arg1: &str, arg2: Option<&str>) -> Result<String
         }
         "execute_command" => {
             let trimmed = arg1.trim();
-            // Block dangerous commands
-            let dangerous = ["rm -rf /", "rm -rf /*", "mkfs", ":(){ :|:& };:", "> /dev/sda"];
-            for d in &dangerous {
-                if trimmed.contains(d) {
-                    bail!("Security violation: destructive command blocked: '{}'", trimmed);
-                }
+            if let security::SecurityVerdict::Blocked { reason } = security::audit_command(trimmed) {
+                bail!("Security violation: {}", reason);
             }
 
             let mut child = Command::new("bash")
@@ -385,22 +376,42 @@ pub fn execute_tool(name: &str, arg1: &str, arg2: Option<&str>) -> Result<String
                 .spawn()
                 .with_context(|| format!("Failed to spawn command: {}", trimmed))?;
 
-            // Timeout enforcement: 10 seconds
+            // Drain stdout/stderr on background threads so >64 KB output cannot deadlock the pipe
+            let stdout_handle = child.stdout.take().map(|mut r| {
+                std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    let _ = std::io::Read::read_to_end(&mut r, &mut buf);
+                    buf
+                })
+            });
+            let stderr_handle = child.stderr.take().map(|mut r| {
+                std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    let _ = std::io::Read::read_to_end(&mut r, &mut buf);
+                    buf
+                })
+            });
+
             let start = std::time::Instant::now();
             let timeout = Duration::from_secs(10);
 
             while start.elapsed() < timeout {
                 if let Ok(Some(status)) = child.try_wait() {
-                    let output = child.wait_with_output()?;
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let raw_output = format!("Exit Status: {}\n{}{}", status, stdout, stderr);
+                    let stdout_bytes = stdout_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+                    let stderr_bytes = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+                    let raw_output = format!(
+                        "Exit Status: {}\n{}{}",
+                        status,
+                        String::from_utf8_lossy(&stdout_bytes),
+                        String::from_utf8_lossy(&stderr_bytes)
+                    );
                     return Ok(rtk::compact_command_output(trimmed, &raw_output));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
 
             let _ = child.kill();
+            let _ = child.wait();
             bail!("Command timed out after 10 seconds: {}", trimmed);
         }
         "memory_search" => {

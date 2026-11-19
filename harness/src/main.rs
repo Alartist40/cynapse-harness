@@ -250,26 +250,70 @@ async fn main() -> Result<()> {
             println!("✓ Cleanup complete: {} files pruned, {:.2} MB storage recovered.", cleaned_files, freed_bytes as f64 / (1024.0 * 1024.0));
         }
         Some(Commands::Bench { model }) => {
-            println!("======================================================================");
-            println!("           ⚡ CYNAPSE EDGE AGENT BENCHMARK SCORECARD                 ");
-            println!("======================================================================");
-            let target_model = model.unwrap_or_else(|| "Qwen/Qwen2.5-Coder-3B-Instruct".to_string());
-            println!("Benchmarking Model : {}", target_model);
-            println!("Engine Routing     : Leafcutter Pure-Rust / L3 Speculative Decode");
-            
             let hw = cynapse_engine::probe_hardware_info();
             let pwr = cynapse_core::power::PowerThrottler::new().detect_power_source();
-            println!("Hardware Cores     : {} cores (AVX-512 / NEON SIMD)", hw.cpu_cores);
-            println!("Power Status       : {:?}", pwr);
-            println!("Memory Bandwidth   : Peak DDR5 Saturation ~64 GB/s");
-            println!("----------------------------------------------------------------------");
-            println!("1. L3-Resident Speculative Latency : 4.2 ms (Needle-3 Draft)");
-            println!("2. Batched Verification Speedup     : 2.8x (vs sequential autoregressive)");
-            println!("3. Tool JSON Schema Compliance     : 100.0% (Zero parse errors)");
-            println!("4. Operational Intensity           : 4.0 FLOPs/byte (4-bit Q4_K_M)");
-            println!("5. Tiled Flash-Attention RAM Sav.  : 268 MB intermediate memory eliminated");
-            println!("======================================================================");
-            println!("Overall Edge Readiness Score: [ 98.4 / 100 ] - PRODUCTION CERTIFIED");
+            let target_model = model.unwrap_or_else(|| {
+                if !session.active_model_name.is_empty() && !session.active_model_name.starts_with('(') {
+                    session.active_model_name.clone()
+                } else {
+                    "qwen2.5-0.5b-instruct-q4_k_m.gguf".to_string()
+                }
+            });
+            let model_path = models_dir.join(&target_model);
+            let tier = route_model(&model_path, false).tier;
+            let start = std::time::Instant::now();
+            let mut ttft_ms: Option<u128> = None;
+            let mut token_pieces = 0usize;
+
+            println!("Running live inference benchmark on '{}' ({})...", target_model, tier.label());
+            let bench_res = cynapse_engine::query_model_stream(
+                tier,
+                &session.tier1_endpoint,
+                &target_model,
+                "Reply with a 25-word summary of local-first AI inference.",
+                "Be concise and direct.",
+                |_, piece| {
+                    if !piece.is_empty() && ttft_ms.is_none() {
+                        ttft_ms = Some(start.elapsed().as_millis());
+                    }
+                    token_pieces += 1;
+                },
+            ).await;
+
+            match bench_res {
+                Ok(stats) => {
+                    let report = format!(
+                        "======================================================================\n\
+                                   CYNAPSE LIVE HARDWARE BENCHMARK REPORT\n\
+                        ======================================================================\n\
+                        Model              : {}\n\
+                        Engine Tier        : {}\n\
+                        CPU Cores          : {} cores\n\
+                        Power Source       : {:?}\n\
+                        TTFT               : {} ms\n\
+                        Tokens Generated   : {} (streamed chunks: {})\n\
+                        Elapsed Time       : {:.2} s\n\
+                        Measured Speed     : {:.2} tok/s\n\
+                        Available Host RAM : {:.2} GiB\n\
+                        ======================================================================",
+                        stats.model_name, tier.label(), hw.cpu_cores, pwr,
+                        ttft_ms.unwrap_or(0), stats.tokens_generated, token_pieces,
+                        stats.elapsed_sec, stats.tok_per_sec, stats.avail_ram_gb
+                    );
+                    println!("{}", report);
+                    if let Some(home) = dirs::home_dir() {
+                        let out = home.join(".cynapse").join("bench_report.txt");
+                        if let Some(p) = out.parent() { let _ = std::fs::create_dir_all(p); }
+                        if std::fs::write(&out, &report).is_ok() {
+                            println!("Saved report: {}", out.display());
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Benchmark failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Some(Commands::Undo) => {
             println!("↩ Invoking Cynapse Agent File Undo Journal...");

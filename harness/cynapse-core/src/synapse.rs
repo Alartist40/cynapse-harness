@@ -241,6 +241,17 @@ impl SynapseRegistry {
             return Ok(format!("Tool '{}' executed successfully with arguments: {}", tool_name, arguments));
         }
 
+        if let crate::security::SecurityVerdict::Blocked { reason } = crate::security::audit_command(cmd_str) {
+            bail!("Security violation in synapse command: {}", reason);
+        }
+
+        // Lifecycle hook: before_tool_exec (runs BEFORE spawning child process)
+        if let Ok(hooks) = self.hooks.lock() {
+            for hook in &hooks.before_tool {
+                hook(tool_name, arguments)?;
+            }
+        }
+
         let arg_json = serde_json::to_string(arguments)?;
         let mut child = Command::new("bash")
             .arg("-c")
@@ -255,13 +266,6 @@ impl SynapseRegistry {
         if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
             let _ = stdin.write_all(arg_json.as_bytes());
-        }
-
-        // Lifecycle hook: before_tool_exec
-        if let Ok(hooks) = self.hooks.lock() {
-            for hook in &hooks.before_tool {
-                hook(tool_name, arguments)?;
-            }
         }
 
         let output = child.wait_with_output().context("Waiting for synapse tool process")?;

@@ -19,10 +19,14 @@ pub enum SecurityVerdict {
     Blocked { reason: String },
 }
 
-/// Dangerous destructive commands that are permanently blocked.
+/// Dangerous destructive commands that are permanently blocked (checked against whitespace-normalized text).
 const PERMANENTLY_BLOCKED_COMMANDS: &[&str] = &[
     "rm -rf /",
     "rm -rf /*",
+    "rm -fr /",
+    "rm -fr /*",
+    "rm -rf ~",
+    "rm -rf $home",
     ":(){ :|:& };:",
     "mkfs",
     "> /dev/sda",
@@ -33,15 +37,21 @@ const PERMANENTLY_BLOCKED_COMMANDS: &[&str] = &[
 
 /// Patterns requiring mandatory human-in-the-loop confirmation.
 const APPROVAL_ESCALATION_PATTERNS: &[&str] = &[
-    "| bash",
-    "| sh",
-    "| zsh",
+    "|bash",
+    "|sh",
+    "|zsh",
+    "|dash",
+    "eval $(",
+    "eval \"$(",
+    "base64 -d",
     "curl",
     "wget",
+    "nc ",
+    "ncat ",
     "sudo",
     "doas",
     "chmod 777",
-    "chmod -R 777",
+    "chmod -r 777",
     "chown root",
     "userdel",
     "shutdown",
@@ -49,41 +59,52 @@ const APPROVAL_ESCALATION_PATTERNS: &[&str] = &[
 ];
 
 /// Sensitive paths that must never be read or overwritten.
-const SENSITIVE_PATH_PATTERNS: &[&str] = &[
+pub const SENSITIVE_PATH_PATTERNS: &[&str] = &[
     "/etc/shadow",
+    "/etc/passwd",
     "/etc/sudoers",
+    "/etc/master.passwd",
+    "/proc/kcore",
+    "/proc/self/environ",
+    "/dev/mem",
+    "/dev/kmem",
     "id_rsa",
     "id_ed25519",
     ".ssh/authorized_keys",
+    "/.ssh",
     ".gnupg",
+    ".bashrc",
+    ".zshrc",
 ];
+
+/// Normalize whitespace and compact pipe spacing (`| bash` -> `|bash`) to defeat spacing bypasses.
+fn normalize_cmd(command: &str) -> String {
+    let collapsed = command.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    collapsed.replace("| ", "|").replace(" |", "|")
+}
 
 /// Audits a raw shell command string.
 pub fn audit_command(command: &str) -> SecurityVerdict {
-    let trimmed = command.trim();
+    let norm = normalize_cmd(command);
 
-    // 1. Permanent block check
     for blocked in PERMANENTLY_BLOCKED_COMMANDS {
-        if trimmed.contains(blocked) {
+        if norm.contains(blocked) {
             return SecurityVerdict::Blocked {
                 reason: format!("Destructive command forbidden by security shield: '{}'", blocked),
             };
         }
     }
 
-    // 2. High-risk escalation check
-    let lower = trimmed.to_lowercase();
     for pattern in APPROVAL_ESCALATION_PATTERNS {
-        if lower.contains(pattern) {
+        if norm.contains(pattern) {
             return SecurityVerdict::RequiresApproval {
                 reason: format!("Escalated command contains privileged or network pipe pattern: '{}'", pattern),
             };
         }
     }
 
-    // 3. Command chaining with sensitive file inspection
     for sens in SENSITIVE_PATH_PATTERNS {
-        if trimmed.contains(sens) {
+        if norm.contains(sens) {
             return SecurityVerdict::Blocked {
                 reason: format!("Access to sensitive system credential target forbidden: '{}'", sens),
             };
@@ -93,8 +114,8 @@ pub fn audit_command(command: &str) -> SecurityVerdict {
     SecurityVerdict::Safe
 }
 
-/// Audits a filesystem path target.
-pub fn audit_path(path_str: &str, _for_write: bool) -> SecurityVerdict {
+/// Audits a filesystem path target (blocks sensitive targets + flags writes outside workspace).
+pub fn audit_path(path_str: &str, for_write: bool) -> SecurityVerdict {
     let lower = path_str.to_lowercase();
 
     for sens in SENSITIVE_PATH_PATTERNS {
@@ -105,11 +126,23 @@ pub fn audit_path(path_str: &str, _for_write: bool) -> SecurityVerdict {
         }
     }
 
-    // Path traversal escape check
-    if path_str.contains("../../../") {
+    if path_str.contains("..") {
         return SecurityVerdict::RequiresApproval {
-            reason: format!("Excessive directory traversal detected in path: '{}'", path_str),
+            reason: format!("Directory traversal detected in path: '{}'", path_str),
         };
+    }
+
+    if for_write {
+        let p = std::path::Path::new(path_str);
+        if p.is_absolute() || path_str.starts_with('~') {
+            if let Ok(cwd) = std::env::current_dir() {
+                if !p.starts_with(&cwd) && !p.starts_with("/tmp") {
+                    return SecurityVerdict::RequiresApproval {
+                        reason: format!("Write target outside workspace requires approval: '{}'", path_str),
+                    };
+                }
+            }
+        }
     }
 
     SecurityVerdict::Safe

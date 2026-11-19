@@ -5009,26 +5009,43 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                             .border_style(Style::default().fg(Color::Cyan))
                             .style(Style::default().bg(t.card_bg()));
 
+                        let sum_cat = |needle: &str| -> usize {
+                            self.security_report.as_ref().map(|r| {
+                                r.inspected_targets.iter()
+                                    .filter(|tgt| tgt.category.to_lowercase().contains(needle) || tgt.target.to_lowercase().contains(needle))
+                                    .map(|tgt| tgt.items_checked)
+                                    .sum()
+                            }).unwrap_or(0)
+                        };
+                        let findings_len = self.security_report.as_ref().map(|r| r.findings.len()).unwrap_or(0);
+                        let status_badge = if self.security_report.is_none() {
+                            Span::styled("  [ PENDING ]", Style::default().fg(Color::Yellow))
+                        } else if findings_len > 0 {
+                            Span::styled("  [ ALERT ]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                        } else {
+                            Span::styled("  [ PASS ]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+                        };
+
                         let sensor_lines = vec![
                             Line::from(vec![
                                 Span::styled("  Chromium/Brave DBs: ", t.dim_text()),
-                                Span::styled("11,420 checked", Style::default().fg(Color::White)),
-                                Span::styled("  [ PASS ]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                Span::styled(format!("{} checked", sum_cat("chrom")), Style::default().fg(Color::White)),
+                                status_badge.clone(),
                             ]),
                             Line::from(vec![
                                 Span::styled("  Firefox Places/Gecko: ", t.dim_text()),
-                                Span::styled("2,810 checked", Style::default().fg(Color::White)),
-                                Span::styled(" [ PASS ]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                Span::styled(format!("{} checked", sum_cat("firefox")), Style::default().fg(Color::White)),
+                                status_badge.clone(),
                             ]),
                             Line::from(vec![
                                 Span::styled("  Local DNS Hosts Cache: ", t.dim_text()),
-                                Span::styled("199 checked", Style::default().fg(Color::White)),
-                                Span::styled("  [ PASS ]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                Span::styled(format!("{} checked", sum_cat("dns") + sum_cat("hosts")), Style::default().fg(Color::White)),
+                                status_badge.clone(),
                             ]),
                             Line::from(vec![
-                                Span::styled("  Staging Hashes & COM:  ", t.dim_text()),
-                                Span::styled("0 detected", Style::default().fg(Color::White)),
-                                Span::styled("   [ PASS ]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                Span::styled("  Findings / IOC Hits:   ", t.dim_text()),
+                                Span::styled(format!("{} detected", findings_len), Style::default().fg(if findings_len > 0 { Color::Red } else { Color::White })),
+                                status_badge,
                             ]),
                             Line::from(vec![
                                 Span::styled("  Candiru/AdFection IOC: ", t.dim_text()),
@@ -5362,7 +5379,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                         Line::from(Span::styled("  dynamically while NetGuard monkeypatches outbound socket", Style::default().fg(Color::White))),
                         Line::from(Span::styled("  syscalls to guarantee air-gapped isolation.", Style::default().fg(Color::White))),
                         Line::from(""),
-                        Line::from(Span::styled("  [Score: Domain Specialized / 98.4% Domain Adherence / Clean]", Style::default().fg(Color::Green))),
+                        Line::from(Span::styled("  [Preview Example — Run /eval or 'cynapse bench' to measure live]", Style::default().fg(Color::Yellow))),
                     ];
                     f.render_widget(Paragraph::new(sft_text).block(sft_block), side_chunks[1]);
 
