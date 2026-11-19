@@ -270,6 +270,30 @@ pub fn render_synapse_ascii_line(line: &str, indent: usize, theme: &AppTheme) ->
     Line::from(spans)
 }
 
+/// Aged Tool-Result Pruner (deepseek-harness compaction-tool-result-pruner):
+/// keeps the latest 2 messages verbatim and compacts older tool outputs to 1-line stubs.
+fn compact_history_context(messages: &[ChatMessage], limit: usize) -> String {
+    let start = messages.len().saturating_sub(limit);
+    let slice = &messages[start..];
+    let n = slice.len();
+    slice
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| {
+            let is_aged = idx + 2 < n;
+            let is_tool = m.role == "tool" || m.content.contains("Exit Status:") || m.content.contains("[Tool");
+            if is_aged && is_tool && m.content.len() > 240 {
+                let lines = m.content.lines().count();
+                let first = m.content.lines().next().unwrap_or("").chars().take(80).collect::<String>();
+                format!("{}: [pruned tool output ({} lines): {}...]", m.role.to_uppercase(), lines, first)
+            } else {
+                format!("{}: {}", m.role.to_uppercase(), m.content)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 pub fn finalization_notice(max_steps: usize) -> String {
     format!(
         "TOOL BUDGET EXHAUSTED after {} steps. Do NOT emit tool calls or JSON blocks. \
@@ -337,6 +361,8 @@ pub struct TuiApp {
     pub preload_started_at: std::time::Instant,
     pub prompt_history: Vec<String>,
     pub history_idx: Option<usize>,
+    pub auto_route: bool,
+    pub last_activity_at: std::time::Instant,
     pub finalization_inflight: bool,
     pub turn_verified: bool,
 
@@ -522,6 +548,8 @@ impl TuiApp {
                 .map(|s| s.lines().filter(|l| !l.trim().is_empty()).map(String::from).collect())
                 .unwrap_or_default(),
             history_idx: None,
+            auto_route: false,
+            last_activity_at: std::time::Instant::now(),
             update_notification: {
                 let slot = Arc::new(std::sync::Mutex::new(None));
                 let worker_slot = slot.clone();
@@ -1410,12 +1438,17 @@ impl TuiApp {
             self.poll_download_events();
             self.poll_update_events();
             self.poll_update_notification();
+            if !self.is_generating && self.last_activity_at.elapsed() > std::time::Duration::from_secs(300) {
+                self.read_receipts = Default::default();
+                self.last_activity_at = std::time::Instant::now();
+            }
 
             terminal.draw(|f| self.ui(f))?;
 
             if event::poll(std::time::Duration::from_millis(30))? {
                 match event::read()? {
                     Event::Key(key) => {
+                        self.last_activity_at = std::time::Instant::now();
                         // Global Interrupt
                         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                             self.save_current_session();
@@ -2713,6 +2746,39 @@ impl TuiApp {
                                 }
 
                                 // Execute Slash Commands
+                                if trimmed == "/auto" {
+                                    self.auto_route = !self.auto_route;
+                                    self.messages.push(ChatMessage {
+                                        role: "system".into(),
+                                        content: format!("Dual-Model /auto router (LFM3 fast chat + Ornith coding): {}", if self.auto_route { "ON" } else { "OFF" }),
+                                        thinking: None,
+                                    });
+                                    continue;
+                                }
+
+                                if trimmed == "/replay" {
+                                    let turns: Vec<_> = self.messages.iter()
+                                        .filter(|m| m.role == "user" || m.role == "assistant")
+                                        .map(|m| cynapse_core::replay::ReplayTurn { role: m.role.clone(), content: m.content.clone() })
+                                        .collect();
+                                    let msg = match cynapse_core::replay::save_replay(&self.session_id, &turns) {
+                                        Ok(p) => format!("Saved {} turns for offline replay: `{}`", turns.len(), p.display()),
+                                        Err(e) => format!("Replay save failed: {}", e),
+                                    };
+                                    self.messages.push(ChatMessage { role: "system".into(), content: msg, thinking: None });
+                                    continue;
+                                }
+
+                                if trimmed == "/fit" {
+                                    let fit = cynapse_core::replay::score_model_fit(&self.active_model_name, self.last_ttft_ms.unwrap_or(2000), self.last_tok_per_sec.max(0.1), true);
+                                    self.messages.push(ChatMessage {
+                                        role: "system".into(),
+                                        content: format!("**Model Fit Score**: `{}` -> **{}/100** (TTFT: {}ms, Speed: {:.1} tok/s)", fit.model, fit.score, fit.ttft_ms, fit.tok_per_sec),
+                                        thinking: None,
+                                    });
+                                    continue;
+                                }
+
                                 if trimmed == "/perf" {
                                     let hp = dirs::home_dir().map(|h| h.join(".cynapse").join("bench_history.tsv"));
                                     let msg = hp.and_then(|p| std::fs::read_to_string(p).ok())
@@ -3585,17 +3651,7 @@ impl TuiApp {
                                     self.dendrite_ctx.build_prompt_with_options(&trimmed, 1500, true, false)
                                 };
 
-                                let history_context: String = self.messages
-                                    .iter()
-                                    .take(self.messages.len().saturating_sub(1))
-                                    .rev()
-                                    .take(6)
-                                    .collect::<Vec<_>>()
-                                    .into_iter()
-                                    .rev()
-                                    .map(|m| format!("{}: {}", m.role.to_uppercase(), m.content))
-                                    .collect::<Vec<_>>()
-                                    .join("\n\n");
+                                let history_context = compact_history_context(&self.messages[..self.messages.len().saturating_sub(1)], 6);
 
                                 let prompt = cynapse_core::offline_agent::compile_zone_b_tail(&memory_prompt, &history_context, &trimmed, None);
 
@@ -3605,7 +3661,14 @@ impl TuiApp {
 
                                 let tier = self.active_tier;
                                 let endpoint = self.tier1_endpoint.clone();
-                                let model_name = self.active_model_name.clone();
+                                let mut model_name = self.active_model_name.clone();
+                                if self.auto_route && skip_memory {
+                                    if let Ok(entries) = std::fs::read_dir(&self.models_dir) {
+                                        if let Some(lfm) = entries.flatten().filter_map(|e| e.file_name().into_string().ok()).find(|n| n.to_lowercase().contains("lfm") && n.ends_with(".gguf")) {
+                                            model_name = lfm;
+                                        }
+                                    }
+                                }
 
                                 tokio::spawn(async move {
                                     let res = query_model_stream(
@@ -3814,10 +3877,7 @@ impl TuiApp {
                                 let endpoint = self.tier1_endpoint.clone();
                                 let model_name = self.active_model_name.clone();
 
-                                let history_context: String = self.messages.iter().rev().take(6).collect::<Vec<_>>().into_iter().rev()
-                                    .map(|m| format!("{}: {}", m.role.to_uppercase(), m.content))
-                                    .collect::<Vec<_>>()
-                                    .join("\n\n");
+                                let history_context = compact_history_context(&self.messages, 6);
 
                                 let notice = finalization_notice(MAX_AGENT_STEPS);
                                 let prompt = cynapse_core::offline_agent::compile_zone_b_tail(
@@ -3942,10 +4002,7 @@ impl TuiApp {
                                     let endpoint = self.tier1_endpoint.clone();
                                     let model_name = self.active_model_name.clone();
 
-                                    let history_context: String = self.messages.iter().rev().take(6).collect::<Vec<_>>().into_iter().rev()
-                                        .map(|m| format!("{}: {}", m.role.to_uppercase(), m.content))
-                                        .collect::<Vec<_>>()
-                                        .join("\n\n");
+                                    let history_context = compact_history_context(&self.messages, 6);
 
                                     let tool_instruction = format!(
                                         "Tool Results for `{}`:\n{}\n\nContinue resolution of user request: {}",
