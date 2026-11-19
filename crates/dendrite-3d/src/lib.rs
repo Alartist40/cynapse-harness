@@ -1,6 +1,7 @@
 //! Dendrite-3D — Pure Rust Ratatui 3D Celestial Galaxy Visualization & Hierarchical Orbit Engine for Cynapse Memory.
 
 pub mod builder;
+pub mod neural_atlas;
 pub mod physics;
 pub mod renderer;
 pub mod schema;

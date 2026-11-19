@@ -346,6 +346,8 @@ pub struct TuiApp {
     // 3D Galaxy Camera state
     pub galaxy_yaw: f32,
     pub galaxy_pitch: f32,
+    pub galaxy_zoom: f32,
+    pub dendrite_time_pct: f32,
     pub galaxy_auto_spin: bool,
     pub galaxy_anim_spin: f32,
     pub show_thinking: bool,
@@ -515,6 +517,8 @@ impl TuiApp {
             hw_info,
             galaxy_yaw: 0.4,
             galaxy_pitch: 0.3,
+            galaxy_zoom: 32.0,
+            dendrite_time_pct: 1.0,
             galaxy_auto_spin: true,
             galaxy_anim_spin: 0.0,
             loop_guard: LoopGuard::default(),
@@ -2196,6 +2200,18 @@ impl TuiApp {
                                     }
                                     _ => {}
                                 },
+                                KeyCode::Char('+') | KeyCode::Char('=') if self.modal == ActiveModal::MemoryGraph => {
+                                    self.galaxy_zoom = (self.galaxy_zoom - 3.5).clamp(14.0, 72.0);
+                                }
+                                KeyCode::Char('-') if self.modal == ActiveModal::MemoryGraph => {
+                                    self.galaxy_zoom = (self.galaxy_zoom + 3.5).clamp(14.0, 72.0);
+                                }
+                                KeyCode::Char('[') if self.modal == ActiveModal::MemoryGraph => {
+                                    self.dendrite_time_pct = (self.dendrite_time_pct - 0.1).clamp(0.1, 1.0);
+                                }
+                                KeyCode::Char(']') if self.modal == ActiveModal::MemoryGraph => {
+                                    self.dendrite_time_pct = (self.dendrite_time_pct + 0.1).clamp(0.1, 1.0);
+                                }
                                 KeyCode::Char('e') | KeyCode::Char('E') => match self.modal {
                                     ActiveModal::SecurityForensics => {
                                         if let Some(rep) = &self.security_report {
@@ -7040,159 +7056,91 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
         }
     }
 
-    /// Render Multi-Galaxy 3D Dendrite Memory Atlas Visualizer inside Ratatui modal
+    /// Render Brainstem-to-Cortex 2x4 Braille Neural Atlas inside Ratatui modal
     fn render_3d_galaxy_atlas(&self, f: &mut Frame, area: Rect) {
         let t = self.theme;
-        let width = area.width.saturating_sub(4) as usize;
+        let show_inspector = self.galaxy_zoom <= 42.0 && area.width >= 78;
+        let inspector_w = if show_inspector { 28usize } else { 0usize };
+        let width = (area.width.saturating_sub(4) as usize).saturating_sub(inspector_w);
         let height = area.height.saturating_sub(6) as usize;
 
         let (nodes, _edges) = self.graph.topology();
-
-        // Canvas grid buffer initialized to clean empty space
-        let mut grid: Vec<Vec<(char, Style)>> = vec![vec![(' ', Style::default()); width]; height];
-
         let mut cam = dendrite_3d::renderer::Camera3D::new();
         cam.yaw = self.galaxy_yaw;
         cam.pitch = self.galaxy_pitch;
-        cam.distance = 38.0;
+        cam.distance = self.galaxy_zoom;
         cam.fov = 1.35;
 
-        // 1. Faint, Minimal Cosmic Background Starfield
-        let star_seeds = [
-            (-32.0, 14.0, -22.0), (28.0, -16.0, 24.0), (-24.0, -20.0, -12.0),
-            (30.0, 18.0, 15.0), (-35.0, 7.0, 26.0), (20.0, -25.0, -24.0),
-            (-12.0, 28.0, 7.0), (32.0, -10.0, -20.0),
-        ];
-
-        for (sx, sy, sz) in star_seeds {
-            let pt = dendrite_3d::renderer::GalaxyRenderer::project_point([sx, sy, sz], &cam, width as u16, height as u16);
-            if pt.visible {
-                let px = pt.screen_x as usize;
-                let py = pt.screen_y as usize;
-                if py < height && px < width {
-                    grid[py][px] = ('.', Style::default().fg(Color::Rgb(55, 55, 75)));
+        let neural_pts: Vec<dendrite_3d::neural_atlas::NeuralPoint> = nodes
+            .iter()
+            .map(|n| {
+                let (cluster_idx, color) = match n.category() {
+                    cynapse_memory::graph::NodeCategory::Meta => (0, Color::Green),
+                    cynapse_memory::graph::NodeCategory::Engineering => (1, Color::Cyan),
+                    cynapse_memory::graph::NodeCategory::Personal => (2, Color::LightMagenta),
+                    cynapse_memory::graph::NodeCategory::Preferences => (3, Color::Yellow),
+                    cynapse_memory::graph::NodeCategory::Episodic => (4, Color::Rgb(140, 180, 255)),
+                    cynapse_memory::graph::NodeCategory::Transient => (4, Color::Rgb(160, 165, 190)),
+                };
+                dendrite_3d::neural_atlas::NeuralPoint {
+                    cluster_idx,
+                    mass: n.mass,
+                    pinned: n.tags.iter().any(|tag| tag == "pinned"),
+                    created_at: n.created_at,
+                    color,
                 }
-            }
-        }
+            })
+            .collect();
 
-        // 2. Clean Planetary Orbital Tracks (Cleanly spaced dashed guides)
-        let planetary_tracks = [9.0f32, 16.0f32, 23.0f32, 30.0f32, 37.0f32];
-        for r in planetary_tracks {
-            let steps = 36;
-            for s in 0..steps {
-                let theta = (s as f32) * (2.0 * std::f32::consts::PI / (steps as f32));
-                let rx = r * theta.cos();
-                let rz = r * theta.sin();
-                let ry = 0.0;
-                let pt = dendrite_3d::renderer::GalaxyRenderer::project_point([rx, ry, rz], &cam, width as u16, height as u16);
-                if pt.visible {
-                    let px = pt.screen_x as usize;
-                    let py = pt.screen_y as usize;
-                    if py < height && px < width && grid[py][px].0 == ' ' {
-                        grid[py][px] = ('·', Style::default().fg(Color::Rgb(40, 44, 60)));
-                    }
-                }
-            }
-        }
+        let grid = dendrite_3d::neural_atlas::render_neural_point_cloud(
+            width,
+            height,
+            &cam,
+            self.galaxy_anim_spin,
+            self.dendrite_time_pct,
+            &neural_pts,
+        );
 
-        // 3. Central Sun: Core Memory anchored at 3D origin
-        let supermassive = self.graph.supermassive_node();
-        let supermassive_id = supermassive.as_ref().map(|n| n.id.as_str());
-
-        let sun_pt = dendrite_3d::renderer::GalaxyRenderer::project_point([0.0, 0.0, 0.0], &cam, width as u16, height as u16);
-        if sun_pt.visible {
-            let cpx = sun_pt.screen_x as usize;
-            let cpy = sun_pt.screen_y as usize;
-            if cpy < height {
-                if cpx >= 1 && cpx + 1 < width {
-                    grid[cpy][cpx - 1] = ('✦', Style::default().fg(Color::Yellow));
-                    grid[cpy][cpx] = ('✸', Style::default().fg(Color::Rgb(255, 215, 0)).add_modifier(Modifier::BOLD));
-                    grid[cpy][cpx + 1] = ('✦', Style::default().fg(Color::Yellow));
-                } else if cpx < width {
-                    grid[cpy][cpx] = ('✸', Style::default().fg(Color::Rgb(255, 215, 0)).add_modifier(Modifier::BOLD));
-                }
-            }
-        }
-
-        // 4. Planetary Category Systems Orbiting the Sun
-        let planet_specs = [
-            (cynapse_memory::graph::NodeCategory::Meta, 9.0f32, 0.045f32, 0.0f32, "Meta", Color::Green),
-            (cynapse_memory::graph::NodeCategory::Engineering, 16.0f32, 0.032f32, 1.3f32, "Engineering", Color::Cyan),
-            (cynapse_memory::graph::NodeCategory::Personal, 23.0f32, 0.024f32, 2.6f32, "Personal", Color::LightMagenta),
-            (cynapse_memory::graph::NodeCategory::Preferences, 30.0f32, 0.018f32, 3.9f32, "Preferences", Color::Yellow),
-            (cynapse_memory::graph::NodeCategory::Episodic, 37.0f32, 0.013f32, 5.2f32, "Episodic", Color::Rgb(140, 180, 255)),
-        ];
-
-        let mut category_nodes: std::collections::HashMap<cynapse_memory::graph::NodeCategory, Vec<&cynapse_memory::graph::Node>> = std::collections::HashMap::new();
-        for node in &nodes {
-            if Some(node.id.as_str()) != supermassive_id {
-                category_nodes.entry(node.category()).or_default().push(node);
-            }
-        }
-
-        for (cat, orbit_r, speed, angle_offset, _planet_name, planet_color) in planet_specs {
-            let current_angle = angle_offset + self.galaxy_anim_spin * speed;
-            let px_3d = orbit_r * current_angle.cos();
-            let pz_3d = orbit_r * current_angle.sin();
-            let py_3d = 0.6 * (current_angle * 1.5).sin();
-
-            let planet_pt = dendrite_3d::renderer::GalaxyRenderer::project_point([px_3d, py_3d, pz_3d], &cam, width as u16, height as u16);
-            if planet_pt.visible {
-                let px = planet_pt.screen_x as usize;
-                let py = planet_pt.screen_y as usize;
-                if py < height && px < width {
-                    grid[py][px] = ('●', Style::default().fg(planet_color).add_modifier(Modifier::BOLD));
-                }
-            }
-
-            // Draw Moons revolving around the Planet
-            if let Some(nodes_in_cat) = category_nodes.get(&cat) {
-                for (idx, node) in nodes_in_cat.iter().enumerate() {
-                    let moon_r = 2.2f32 + (idx as f32 % 3.0) * 1.2f32;
-                    let moon_speed = 0.12f32 + (idx as f32 % 2.0) * 0.04f32;
-                    let moon_angle = (idx as f32 * 1.4) + self.galaxy_anim_spin * moon_speed;
-
-                    let mx_3d = px_3d + moon_r * moon_angle.cos();
-                    let mz_3d = pz_3d + moon_r * moon_angle.sin();
-                    let my_3d = py_3d + moon_r * 0.3 * moon_angle.sin();
-
-                    let moon_pt = dendrite_3d::renderer::GalaxyRenderer::project_point([mx_3d, my_3d, mz_3d], &cam, width as u16, height as u16);
-                    if moon_pt.visible {
-                        let mx = moon_pt.screen_x as usize;
-                        let my = moon_pt.screen_y as usize;
-                        if my < height && mx < width {
-                            if grid[my][mx].0 == ' ' || grid[my][mx].0 == '·' || grid[my][mx].0 == '.' {
-                                let is_pinned = node.tags.iter().any(|t| t == "pinned");
-                                let moon_glyph = if is_pinned { '*' } else if node.mass >= 2.0 { '+' } else { '.' };
-                                grid[my][mx] = (moon_glyph, if is_pinned { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(planet_color) });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 5. Convert grid to lines
         let mut lines = Vec::new();
+        let zoom_mode = if self.galaxy_zoom > 42.0 { "Soma Hubs" } else { "Full Cortex" };
         lines.push(Line::from(vec![
-            Span::styled("DENDRITE PLANETARY GALAXY ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("DENDRITE NEURAL ATLAS ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::styled(" ◖ ", t.dim_text()),
-            Span::styled("Sun: Core", Style::default().fg(Color::Rgb(255, 215, 0))),
+            Span::styled(format!("Nodes: {}", nodes.len()), Style::default().fg(Color::Green)),
             Span::styled(" │ ", t.dim_text()),
-            Span::styled("Planets: Clusters", Style::default().fg(Color::Cyan)),
+            Span::styled(format!("View: {} ({:.0})", zoom_mode, self.galaxy_zoom), Style::default().fg(Color::Yellow)),
             Span::styled(" │ ", t.dim_text()),
-            Span::styled("Moons: Facts (* Pinned)", Style::default().fg(Color::LightMagenta)),
+            Span::styled(format!("Growth: {:.0}%", self.dendrite_time_pct * 100.0), Style::default().fg(Color::LightMagenta)),
             Span::styled(" │ ", t.dim_text()),
-            Span::styled(format!("Orbit: {}", if self.galaxy_auto_spin { "ON" } else { "PAUSED" }), if self.galaxy_auto_spin { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Yellow) }),
+            Span::styled(format!("Pulse: {}", if self.galaxy_auto_spin { "ON" } else { "PAUSED" }), if self.galaxy_auto_spin { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Yellow) }),
             Span::styled(" ◗", t.dim_text()),
         ]));
-        let sep_str = "─".repeat(width);
+        let total_w = area.width.saturating_sub(4) as usize;
+        let sep_str = "─".repeat(total_w);
         lines.push(Line::from(Span::styled(&sep_str, t.border_style())));
 
-        for row in grid {
-            let mut spans = Vec::new();
+        let mut inspector_rows: Vec<String> = Vec::new();
+        if show_inspector {
+            inspector_rows.push("SOMA INSPECTOR".to_string());
+            inspector_rows.push("──────────────".to_string());
+            let mut sorted_nodes = nodes.clone();
+            sorted_nodes.sort_by(|a, b| b.mass.partial_cmp(&a.mass).unwrap_or(std::cmp::Ordering::Equal));
+            for n in sorted_nodes.iter().take(height.saturating_sub(3)) {
+                let pin = if n.tags.iter().any(|tg| tg == "pinned") { "★" } else { "·" };
+                let snippet: String = n.content.chars().take(22).collect();
+                inspector_rows.push(format!("{} {}", pin, snippet.replace('\n', " ")));
+            }
+        }
+
+        for (r_idx, row) in grid.into_iter().enumerate() {
+            let mut spans = Vec::with_capacity(row.len() + 2);
             for (ch, st) in row {
                 spans.push(Span::styled(ch.to_string(), st));
+            }
+            if show_inspector {
+                let info = inspector_rows.get(r_idx).map(|s| s.as_str()).unwrap_or("");
+                spans.push(Span::styled(" │ ", t.border_style()));
+                spans.push(Span::styled(format!("{:<25}", info), if r_idx == 0 { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { t.dim_text() }));
             }
             lines.push(Line::from(spans));
         }
@@ -7200,21 +7148,25 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
         lines.push(Line::from(Span::styled(&sep_str, t.border_style())));
         lines.push(Line::from(vec![
             Span::styled("Controls: ", t.dim_text()),
-            Span::styled("Arrow Keys", Style::default().fg(Color::Cyan)),
-            Span::styled(": 3D Pitch/Yaw  │  ", t.dim_text()),
-            Span::styled("Space", Style::default().fg(Color::Yellow)),
-            Span::styled(": Toggle Spin  │  ", t.dim_text()),
-            Span::styled("p", Style::default().fg(Color::Green)),
-            Span::styled(": Pin/Immortalize  │  ", t.dim_text()),
-            Span::styled("Esc / q", Style::default().fg(Color::LightMagenta)),
-            Span::styled(": Return to Chat", t.dim_text()),
+            Span::styled("Arrows", Style::default().fg(Color::Cyan)),
+            Span::styled(": Orbit  │  ", t.dim_text()),
+            Span::styled("+/-", Style::default().fg(Color::Yellow)),
+            Span::styled(": Semantic Zoom  │  ", t.dim_text()),
+            Span::styled("[/]", Style::default().fg(Color::LightMagenta)),
+            Span::styled(": Growth Time  │  ", t.dim_text()),
+            Span::styled("Space", Style::default().fg(Color::Green)),
+            Span::styled(": Spin  │  ", t.dim_text()),
+            Span::styled("p", Style::default().fg(Color::Yellow)),
+            Span::styled(": Pin  │  ", t.dim_text()),
+            Span::styled("Esc/q", Style::default().fg(Color::LightMagenta)),
+            Span::styled(": Close", t.dim_text()),
         ]));
 
         let atlas_widget = Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title(" Dendrite 3D Planetary Galaxy ")
+                .title(" Dendrite Neural Atlas (Brainstem -> Cortex) ")
                 .border_style(t.active_border_style()),
         );
 
