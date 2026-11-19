@@ -15,10 +15,19 @@ pub const DEFAULT_DAEMON_PORT: u16 = 38265;
 
 /// Reads `MemAvailable` from `/proc/meminfo` in MiB (falls back to 0 on non-Linux/error).
 fn available_ram_mb() -> u64 {
+    read_meminfo_mb("MemAvailable:")
+}
+
+/// Reads `MemTotal` from `/proc/meminfo` in MiB (falls back to 0 on non-Linux/error).
+fn total_ram_mb() -> u64 {
+    read_meminfo_mb("MemTotal:")
+}
+
+fn read_meminfo_mb(prefix: &str) -> u64 {
     #[cfg(target_os = "linux")]
     if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
         for line in content.lines() {
-            if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            if let Some(rest) = line.strip_prefix(prefix) {
                 if let Some(kb) = rest.split_whitespace().next().and_then(|s| s.parse::<u64>().ok()) {
                     return kb / 1024;
                 }
@@ -230,14 +239,17 @@ impl LlamaServerDaemon {
         };
 
         let avail_mb = available_ram_mb();
+        let total_mb = total_ram_mb();
         let model_mb = std::fs::metadata(model_path).map(|m| m.len() / (1024 * 1024)).unwrap_or(0);
         let vulkan_backend = Self::find_vulkan_backend();
         let arm_cpu_backend = find_arm_cpu_backend();
         let fast_cores = fast_cpu_cores();
         let ngl = if let Some(custom_ngl) = crate::gpu_layers() {
             custom_ngl.to_string()
-        } else if vulkan_backend.is_some() && avail_mb >= model_mb + 2000 {
-            // Full unified-memory GPU offload only when libggml-vulkan.so AND ample RAM exist;
+        } else if vulkan_backend.is_some()
+            && (avail_mb >= model_mb + 1200 || (total_mb >= model_mb + 2000 && avail_mb >= 1024))
+        {
+            // Full unified-memory GPU offload when libggml-vulkan.so is present and total RAM fits;
             // avoid partial offload (-ngl 20) which bounces CPU<->GPU on every layer.
             "99".to_string()
         } else {
@@ -343,8 +355,8 @@ impl LlamaServerDaemon {
                 }
             }
         }
-        if !draft_found {
-            // Enable prompt ngram speculative decoding for immediate zero-RAM acceleration
+        if !draft_found && std::env::var("CYNAPSE_SPEC_NGRAM").as_deref() == Ok("1") {
+            // Opt-in prompt ngram speculative decoding (disabled by default: 0% acceptance on general chat).
             cmd.arg("--spec-type").arg("ngram-simple");
         }
 
