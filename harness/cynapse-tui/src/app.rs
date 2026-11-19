@@ -333,6 +333,10 @@ pub struct TuiApp {
     pub palette_selected_idx: usize,
     pub loop_guard: LoopGuard,
     pub agent_step_count: usize,
+    pub daemon_ready: Arc<std::sync::atomic::AtomicBool>,
+    pub preload_started_at: std::time::Instant,
+    pub prompt_history: Vec<String>,
+    pub history_idx: Option<usize>,
     pub finalization_inflight: bool,
     pub turn_verified: bool,
 
@@ -510,6 +514,14 @@ impl TuiApp {
             approval_tx,
             approval_rx,
             pending_approval: None,
+            daemon_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            preload_started_at: std::time::Instant::now(),
+            prompt_history: dirs::home_dir()
+                .map(|h| h.join(".cynapse").join("prompt_history"))
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .map(|s| s.lines().filter(|l| !l.trim().is_empty()).map(String::from).collect())
+                .unwrap_or_default(),
+            history_idx: None,
             update_notification: {
                 let slot = Arc::new(std::sync::Mutex::new(None));
                 let worker_slot = slot.clone();
@@ -765,10 +777,13 @@ impl TuiApp {
         let model_name = self.active_model_name.clone();
         let persona_prompt = self.persona_mgr.build_system_prompt();
         let warmup_prefix = cynapse_core::offline_agent::compile_zone_a_prefix_with_tools(&persona_prompt, &[]);
+        let ready_flag = self.daemon_ready.clone();
+        ready_flag.store(false, std::sync::atomic::Ordering::Relaxed);
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             rt.spawn(async move {
                 if cynapse_engine::preload_model(&endpoint, &model_name).await.is_ok() {
                     cynapse_engine::warmup_slot_prefix(&warmup_prefix).await;
+                    ready_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             });
         }
@@ -2647,10 +2662,32 @@ impl TuiApp {
                                 self.scroll_down(5);
                             }
                             KeyCode::Up => {
-                                self.scroll_up(1);
+                                if (self.input.is_empty() || self.history_idx.is_some()) && !self.prompt_history.is_empty() {
+                                    let next = match self.history_idx {
+                                        None => self.prompt_history.len().saturating_sub(1),
+                                        Some(i) => i.saturating_sub(1),
+                                    };
+                                    self.history_idx = Some(next);
+                                    self.input = self.prompt_history[next].clone();
+                                    self.input_cursor = self.input.len();
+                                } else {
+                                    self.scroll_up(1);
+                                }
                             }
                             KeyCode::Down => {
-                                self.scroll_down(1);
+                                if let Some(i) = self.history_idx {
+                                    if i + 1 < self.prompt_history.len() {
+                                        self.history_idx = Some(i + 1);
+                                        self.input = self.prompt_history[i + 1].clone();
+                                        self.input_cursor = self.input.len();
+                                    } else {
+                                        self.history_idx = None;
+                                        self.input.clear();
+                                        self.input_cursor = 0;
+                                    }
+                                } else {
+                                    self.scroll_down(1);
+                                }
                             }
                             KeyCode::Enter => {
                                 if self.is_generating {
@@ -2662,8 +2699,58 @@ impl TuiApp {
                                 }
                                 self.input.clear();
                                 self.input_cursor = 0;
+                                self.history_idx = None;
+                                if self.prompt_history.last().map(|s| s.as_str()) != Some(trimmed.as_str()) {
+                                    self.prompt_history.push(trimmed.clone());
+                                    if self.prompt_history.len() > 200 {
+                                        self.prompt_history.remove(0);
+                                    }
+                                    if let Some(home) = dirs::home_dir() {
+                                        let hp = home.join(".cynapse").join("prompt_history");
+                                        if let Some(p) = hp.parent() { let _ = std::fs::create_dir_all(p); }
+                                        let _ = std::fs::write(&hp, self.prompt_history.join("\n"));
+                                    }
+                                }
 
                                 // Execute Slash Commands
+                                if trimmed == "/perf" {
+                                    let hp = dirs::home_dir().map(|h| h.join(".cynapse").join("bench_history.tsv"));
+                                    let msg = hp.and_then(|p| std::fs::read_to_string(p).ok())
+                                        .filter(|s| !s.trim().is_empty())
+                                        .map(|s| format!("**Benchmark History (`~/.cynapse/bench_history.tsv`)**:\n```tsv\nts\tmodel\tttft_ms\ttok_per_sec\ttokens\n{}\n```", s.lines().rev().take(8).collect::<Vec<_>>().join("\n")))
+                                        .unwrap_or_else(|| "No benchmark history yet. Run `cynapse bench --save`.".into());
+                                    self.messages.push(ChatMessage { role: "system".into(), content: msg, thinking: None });
+                                    continue;
+                                }
+
+                                if trimmed == "/diff" {
+                                    let out = std::process::Command::new("git").args(["status", "-s"]).output()
+                                        .ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+                                    let diff = std::process::Command::new("git").args(["diff", "--stat"]).output()
+                                        .ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+                                    let body = if out.is_empty() && diff.is_empty() {
+                                        "Working tree clean (no uncommitted changes).".to_string()
+                                    } else {
+                                        format!("**Git Status & Diff**:\n```diff\n{}\n{}\n```", out, diff)
+                                    };
+                                    self.messages.push(ChatMessage { role: "system".into(), content: body, thinking: None });
+                                    continue;
+                                }
+
+                                if trimmed == "/export" {
+                                    let out_dir = dirs::home_dir().map(|h| h.join(".cynapse").join("exports")).unwrap_or_else(|| PathBuf::from("./exports"));
+                                    let _ = std::fs::create_dir_all(&out_dir);
+                                    let out_file = out_dir.join(format!("{}.md", self.session_id));
+                                    let mut md = format!("# Cynapse Session `{}`\n\n- **Model**: `{}`\n\n", self.session_id, self.active_model_name);
+                                    for m in &self.messages {
+                                        md.push_str(&format!("## {}\n{}\n\n", m.role.to_uppercase(), m.content));
+                                    }
+                                    match std::fs::write(&out_file, &md) {
+                                        Ok(()) => self.messages.push(ChatMessage { role: "system".into(), content: format!("Exported session transcript to `{}`", out_file.display()), thinking: None }),
+                                        Err(e) => self.messages.push(ChatMessage { role: "error".into(), content: format!("Export failed: {}", e), thinking: None }),
+                                    }
+                                    continue;
+                                }
                                 if trimmed == "/exit" || trimmed == "exit" || trimmed == "quit" {
                                     self.save_current_session();
                                     break;
@@ -4286,17 +4373,22 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
 
         // 1. Top Header Bar (Jcode-style Pill Navigation & Status)
         let (_nodes, _edges) = self.graph.topology();
+        let is_daemon_ready = self.daemon_ready.load(std::sync::atomic::Ordering::Relaxed);
+        let load_secs = self.preload_started_at.elapsed().as_secs();
+        let engine_label = if self.is_generating {
+            "● Running".to_string()
+        } else if self.active_tier == EngineTier::Tier1Fast && !is_daemon_ready && load_secs < 45 {
+            format!("⏳ Loading... {}s", load_secs)
+        } else {
+            match self.active_tier {
+                EngineTier::Tier1Fast => "○ Tier 1 Ready".to_string(),
+                EngineTier::Tier2LargeGguf => "○ Tier 2 Stream".to_string(),
+                EngineTier::Tier3LargeSafetensor => "○ Tier 3 Stream".to_string(),
+            }
+        };
         let engine_span = Span::styled(
-            if self.is_generating {
-                "● Running"
-            } else {
-                match self.active_tier {
-                    EngineTier::Tier1Fast => "○ Tier 1 Fast",
-                    EngineTier::Tier2LargeGguf => "○ Tier 2 Stream",
-                    EngineTier::Tier3LargeSafetensor => "○ Tier 3 Stream",
-                }
-            },
-            if self.is_generating {
+            engine_label,
+            if self.is_generating || (self.active_tier == EngineTier::Tier1Fast && !is_daemon_ready && load_secs < 45) {
                 Style::default().fg(Color::Yellow)
             } else {
                 match self.active_tier {
@@ -4392,10 +4484,8 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
             .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title("").border_style(t.active_border_style()));
         f.render_widget(header, main_chunks[0]);
 
-        // 2. Middle Content Area: Responsive Layout (learn from jcode)
-        // On narrow terminals (< 90 cols), collapse sidebar to give full width to conversation viewport.
-        // On standard terminals (>= 90 cols), use fixed 28-column sidebar.
-        let (sidebar_area, viewport_area) = if screen_w < 90 {
+        // 2. Middle Content Area: Responsive Layout (auto-collapse sidebar below 100 cols)
+        let (sidebar_area, viewport_area) = if screen_w < 100 {
             (Rect::default(), main_chunks[1])
         } else {
             let middle_chunks = Layout::default()

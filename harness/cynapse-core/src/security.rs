@@ -166,6 +166,8 @@ pub fn sandboxed_bash_command(command: &str, work_dir: Option<&std::path::Path>)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
+    let limited_cmd = format!("ulimit -t 10 -n 256 -v 4194304 2>/dev/null; {}", command);
+
     if use_bwrap {
         let mut cmd = std::process::Command::new("bwrap");
         cmd.args(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]);
@@ -182,11 +184,11 @@ pub fn sandboxed_bash_command(command: &str, work_dir: Option<&std::path::Path>)
             cmd.arg("--unshare-net");
         }
         cmd.current_dir(&cwd);
-        cmd.args(["--", "bash", "-c", command]);
+        cmd.args(["--", "bash", "-c", &limited_cmd]);
         cmd
     } else {
         let mut cmd = std::process::Command::new("bash");
-        cmd.current_dir(&cwd).args(["-c", command]);
+        cmd.current_dir(&cwd).args(["-c", &limited_cmd]);
         cmd
     }
 }
