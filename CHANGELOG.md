@@ -2,6 +2,22 @@
 
 All notable changes to Cynapse are documented here.
 
+## [Unreleased] — Harness TUI Polish, Engine Streaming & Dendrite Neural Atlas (2026-11-19)
+
+### Added
+- **Harness TUI Lively Elements (`harness_ui.rs`, `app.rs`)**: Added pulsing neural equalizer (`neural_equalizer`), animated viewport border, live streaming block cursor (`▌`), KV context fuel gauge (`kv_fuel_gauge`), subagent live activity ticker, and 2.5s auto-dismiss toast notifications (`render_toast`) for `/export` and `/replay`.
+- **Engine Streaming, Caching & Speculation (`leafcutter`)**:
+  - `expert_stream.rs`: Packed MoE expert caching with `(layer, expert)` frequency histogram, hot-expert pinning (`pin_hot_experts`), and honest `effective_hit_rate` separating prefetch reads.
+  - `trunk_cache.rs`: Largest-first fixed-point trunk pinning solver (`solve_pinned_layers`) and 1/2-slot prefetch ring (`TrunkRing`).
+  - `cache/kv_polar.rs`: Data-oblivious PolarQuant KV compression (normalized self-inverse FWHT + pairwise polar angle packing).
+  - `cache/pin_pool.rs`: Multi-snapshot prefix pool (`PinPool`, 4–8 LRU slots rewinding to deepest strict prefix).
+  - `inference/speculative.rs`: Batch verification (`verify_batch`), multi-length suffix lookup (`find_best_suffix_draft`), and adaptive EMA speculation controller (`AdaptiveSpecController`).
+- **Dendrite Brainstem-to-Cortex Neural Atlas (`crates/dendrite-3d/src/neural_atlas.rs`)**:
+  - Replaced planetary orbits in `/dendrite` with a 2×4 Unicode Braille sub-pixel point-cloud (`BrailleCanvas`) growing from a vertical Brainstem/Spine through 5 category Soma hubs.
+  - Added frustum culling, subtle traveling synaptic sparks on pinned/heavy nodes, `+`/`-` semantic zoom with right-hand `SOMA INSPECTOR` pane, and `[`/`]` temporal growth scrubbing.
+- **Hardware-Aware Daemon Tuning (`engine/cynapse-engine/src/daemon.rs`)**:
+  - Native `f16` KV cache (`--cache-type-k f16 --cache-type-v f16`), physical-core batch threads (`-tb`), microbatch sizing (`-b 512 -ub 256`), opt-in `CYNAPSE_KV_DISK=1` / `CYNAPSE_SPEC_NGRAM=1`, and automatic CPU/Vulkan offload selection based on `avail_mb >= model_mb + 1200` to avoid GTT spill on unified-memory APUs.
+
 ## [Unreleased] — Sovereign Forensics & Soup Low-VRAM Post-Training Studio (2026-11-11)
 
 ### Added
