@@ -294,10 +294,20 @@ where
         anyhow::bail!("HuggingFace server returned HTTP status: {}", res.status());
     }
 
+    let expected_sha256 = res
+        .headers()
+        .get("x-linked-etag")
+        .or_else(|| res.headers().get("etag"))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim_matches('"').trim().to_ascii_lowercase())
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+
     let total_bytes = res.content_length().unwrap_or(0);
     let mut file = File::create(target_path)
         .with_context(|| format!("Failed to create destination file: {}", target_path.display()))?;
 
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
     let mut stream = res.bytes_stream();
     let mut downloaded_bytes = 0u64;
     let start_time = Instant::now();
@@ -306,6 +316,7 @@ where
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.context("Error downloading chunk from stream")?;
         file.write_all(&bytes)?;
+        hasher.update(&bytes);
         downloaded_bytes += bytes.len() as u64;
 
         if last_emit.elapsed().as_millis() > 100 || downloaded_bytes == total_bytes {
@@ -324,6 +335,19 @@ where
                 speed_mbps,
                 pct,
             });
+        }
+    }
+
+    if let Some(expected) = expected_sha256 {
+        let actual = format!("{:x}", hasher.finalize());
+        if actual != expected {
+            let _ = std::fs::remove_file(target_path);
+            anyhow::bail!(
+                "SHA256 verification failed for HF download '{}': expected {}, got {}",
+                target_path.display(),
+                expected,
+                actual
+            );
         }
     }
 

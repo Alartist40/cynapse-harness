@@ -148,6 +148,49 @@ pub fn audit_path(path_str: &str, for_write: bool) -> SecurityVerdict {
     SecurityVerdict::Safe
 }
 
+/// Builds a `bash -c` Command wrapped in OS-level Bubblewrap (`bwrap`) isolation when available:
+/// read-only rootfs, writable workspace + `/tmp`, empty `tmpfs` over `~/.ssh` & `~/.gnupg`, and `--unshare-net`.
+pub fn sandboxed_bash_command(command: &str, work_dir: Option<&std::path::Path>) -> std::process::Command {
+    use std::sync::OnceLock;
+    static BWRAP_OK: OnceLock<bool> = OnceLock::new();
+    let use_bwrap = *BWRAP_OK.get_or_init(|| {
+        std::process::Command::new("bwrap")
+            .args(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-net", "--", "true"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    });
+
+    let cwd = work_dir
+        .map(|p| p.to_path_buf())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    if use_bwrap {
+        let mut cmd = std::process::Command::new("bwrap");
+        cmd.args(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]);
+        if let Some(home) = dirs::home_dir() {
+            for sens_dir in [".ssh", ".gnupg"] {
+                let p = home.join(sens_dir);
+                if p.exists() {
+                    cmd.arg("--tmpfs").arg(&p);
+                }
+            }
+        }
+        cmd.arg("--bind").arg(&cwd).arg(&cwd);
+        if std::env::var("CYNAPSE_ALLOW_NET_EXEC").as_deref() != Ok("1") {
+            cmd.arg("--unshare-net");
+        }
+        cmd.current_dir(&cwd);
+        cmd.args(["--", "bash", "-c", command]);
+        cmd
+    } else {
+        let mut cmd = std::process::Command::new("bash");
+        cmd.current_dir(&cwd).args(["-c", command]);
+        cmd
+    }
+}
+
 /// Audits an entire prospective ToolCall structure.
 pub fn audit_tool_call(call: &ToolCall) -> SecurityVerdict {
     let (arg1, arg2) = call.to_arg_pair();

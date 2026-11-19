@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -253,10 +253,7 @@ impl SynapseRegistry {
         }
 
         let arg_json = serde_json::to_string(arguments)?;
-        let mut child = Command::new("bash")
-            .arg("-c")
-            .arg(cmd_str)
-            .current_dir(&synapse_path)
+        let mut child = crate::security::sandboxed_bash_command(cmd_str, Some(&synapse_path))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

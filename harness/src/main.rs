@@ -60,6 +60,9 @@ enum Commands {
         /// Target model to benchmark
         #[arg(long)]
         model: Option<String>,
+        /// Append result to ~/.cynapse/bench_history.jsonl for regression tracking
+        #[arg(long)]
+        save: bool,
     },
     /// Revert the latest file change or patch performed by the agent
     Undo,
@@ -249,7 +252,7 @@ async fn main() -> Result<()> {
             }
             println!("✓ Cleanup complete: {} files pruned, {:.2} MB storage recovered.", cleaned_files, freed_bytes as f64 / (1024.0 * 1024.0));
         }
-        Some(Commands::Bench { model }) => {
+        Some(Commands::Bench { model, save }) => {
             let hw = cynapse_engine::probe_hardware_info();
             let pwr = cynapse_core::power::PowerThrottler::new().detect_power_source();
             let target_model = model.unwrap_or_else(|| {
@@ -306,6 +309,22 @@ async fn main() -> Result<()> {
                         if let Some(p) = out.parent() { let _ = std::fs::create_dir_all(p); }
                         if std::fs::write(&out, &report).is_ok() {
                             println!("Saved report: {}", out.display());
+                        }
+                        let hist_path = home.join(".cynapse").join("bench_history.tsv");
+                        if let Ok(prev) = std::fs::read_to_string(&hist_path) {
+                            if let Some(cols) = prev.lines().rev().map(|l| l.split('\t').collect::<Vec<_>>()).find(|c| c.len() >= 4 && c[1] == stats.model_name) {
+                                let prev_ttft = cols[2].parse::<i64>().unwrap_or(0);
+                                let prev_tps = cols[3].parse::<f64>().unwrap_or(0.0);
+                                println!("Regression Delta ({}): {:+.2} tok/s | {:+} ms TTFT", stats.model_name, stats.tok_per_sec - prev_tps, ttft_ms.unwrap_or(0) as i64 - prev_ttft);
+                            }
+                        }
+                        if save {
+                            use std::io::Write;
+                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&hist_path) {
+                                let _ = writeln!(f, "{}\t{}\t{}\t{:.2}\t{}", ts, stats.model_name, ttft_ms.unwrap_or(0), stats.tok_per_sec, stats.tokens_generated);
+                                println!("Appended regression entry: {}", hist_path.display());
+                            }
                         }
                     }
                 }

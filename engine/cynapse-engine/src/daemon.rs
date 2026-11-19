@@ -88,6 +88,24 @@ fn find_arm_cpu_backend() -> Option<PathBuf> {
     None
 }
 
+/// Verify draft model shares tokenizer family and vocab size with target GGUF.
+fn is_draft_compatible(target: &Path, draft: &Path) -> bool {
+    use leafcutter::model::gguf::{GGUFile, GGUFValue};
+    let Ok(t_gguf) = GGUFile::open(target) else { return false; };
+    let Ok(d_gguf) = GGUFile::open(draft) else { return false; };
+    let tok_kind = |g: &GGUFile| match g.metadata.get("tokenizer.ggml.model") {
+        Some(GGUFValue::String(s)) => Some(s.clone()),
+        _ => None,
+    };
+    let vocab_len = |g: &GGUFile| match g.metadata.get("tokenizer.ggml.tokens") {
+        Some(GGUFValue::Array(a)) => Some(a.len()),
+        _ => None,
+    };
+    let (tk_t, tk_d) = (tok_kind(&t_gguf), tok_kind(&d_gguf));
+    let (vl_t, vl_d) = (vocab_len(&t_gguf), vocab_len(&d_gguf));
+    tk_t.is_some() && tk_t == tk_d && vl_t.is_some() && vl_t == vl_d
+}
+
 pub struct LlamaServerDaemon {
     child: Option<Child>,
     pub port: u16,
@@ -305,7 +323,7 @@ impl LlamaServerDaemon {
             cmd.env("GGML_BACKEND_PATH", cpu_path);
         }
 
-        // Check for speculative decoding draft model in parent directory or ~/.cynapse/models
+        // Check for speculative decoding draft model with matching tokenizer & vocab size
         let mut draft_found = false;
         if let Some(parent) = model_path.parent() {
             if let Ok(entries) = std::fs::read_dir(parent) {
@@ -315,6 +333,7 @@ impl LlamaServerDaemon {
                     if (name.contains("needle") || name.contains("draft") || name.contains("qwen2.5-0.5b"))
                         && name.ends_with(".gguf")
                         && p != model_path
+                        && is_draft_compatible(model_path, &p)
                     {
                         cmd.arg("--spec-draft-model").arg(&p);
                         cmd.arg("--spec-draft-n-max").arg("4");

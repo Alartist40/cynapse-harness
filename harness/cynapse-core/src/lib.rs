@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use futures_util::StreamExt;
@@ -368,9 +368,7 @@ pub fn execute_tool(name: &str, arg1: &str, arg2: Option<&str>) -> Result<String
                 bail!("Security violation: {}", reason);
             }
 
-            let mut child = Command::new("bash")
-                .arg("-c")
-                .arg(trimmed)
+            let mut child = security::sandboxed_bash_command(trimmed, None)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
