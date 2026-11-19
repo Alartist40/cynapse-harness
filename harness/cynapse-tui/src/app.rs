@@ -370,6 +370,7 @@ pub struct TuiApp {
     pub at_picker_idx: usize,
     pub drawer_git_status: Vec<String>,
     pub last_tool_output: String,
+    pub toast: Option<(String, std::time::Instant)>,
     pub finalization_inflight: bool,
     pub turn_verified: bool,
 
@@ -564,6 +565,7 @@ impl TuiApp {
             at_picker_idx: 0,
             drawer_git_status: Vec::new(),
             last_tool_output: String::new(),
+            toast: None,
             update_notification: {
                 let slot = Arc::new(std::sync::Mutex::new(None));
                 let worker_slot = slot.clone();
@@ -2844,7 +2846,10 @@ impl TuiApp {
                                         .map(|m| cynapse_core::replay::ReplayTurn { role: m.role.clone(), content: m.content.clone() })
                                         .collect();
                                     let msg = match cynapse_core::replay::save_replay(&self.session_id, &turns) {
-                                        Ok(p) => format!("Saved {} turns for offline replay: `{}`", turns.len(), p.display()),
+                                        Ok(p) => {
+                                            self.toast = Some((format!("Replay saved ({} turns)", turns.len()), std::time::Instant::now()));
+                                            format!("Saved {} turns for offline replay: `{}`", turns.len(), p.display())
+                                        }
                                         Err(e) => format!("Replay save failed: {}", e),
                                     };
                                     self.messages.push(ChatMessage { role: "system".into(), content: msg, thinking: None });
@@ -2894,7 +2899,10 @@ impl TuiApp {
                                         md.push_str(&format!("## {}\n{}\n\n", m.role.to_uppercase(), m.content));
                                     }
                                     match std::fs::write(&out_file, &md) {
-                                        Ok(()) => self.messages.push(ChatMessage { role: "system".into(), content: format!("Exported session transcript to `{}`", out_file.display()), thinking: None }),
+                                        Ok(()) => {
+                                            self.toast = Some((format!("Exported {}.md", self.session_id), std::time::Instant::now()));
+                                            self.messages.push(ChatMessage { role: "system".into(), content: format!("Exported session transcript to `{}`", out_file.display()), thinking: None });
+                                        }
                                         Err(e) => self.messages.push(ChatMessage { role: "error".into(), content: format!("Export failed: {}", e), thinking: None }),
                                     }
                                     continue;
@@ -4537,18 +4545,18 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                 }
             },
         );
+        let eq = crate::harness_ui::neural_equalizer(self.anim_tick, self.is_generating);
         let perf_span = Span::styled(
             if self.is_generating {
-                let wave = self.render_sparkline();
                 if let Some(ttft) = self.last_ttft_ms {
-                    format!("Perf: {:.1} t/s (TTFT: {}ms) {}", self.last_tok_per_sec, ttft, wave)
+                    format!("Perf: {:.1} t/s (TTFT: {}ms) {}", self.last_tok_per_sec, ttft, eq)
                 } else {
-                    format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, wave)
+                    format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, eq)
                 }
             } else if self.last_tok_per_sec > 0.0 {
-                format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, self.render_sparkline())
+                format!("Perf: {:.1} t/s {}", self.last_tok_per_sec, eq)
             } else {
-                format!("Perf: idle {}", self.render_sparkline())
+                format!("Perf: idle {}", eq)
             },
             if self.is_generating {
                 Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)
@@ -4655,6 +4663,15 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
             let value_style = Style::default().fg(Color::White);
             let section_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
 
+            let kv_chars: usize = self.messages.iter().map(|m| m.content.len()).sum();
+            let (kv_bar, kv_color) = crate::harness_ui::kv_fuel_gauge(kv_chars, 8192);
+            let active_bots = self.subagent_mgr.running_count();
+            let bot_ticker = if active_bots > 0 {
+                format!(" {} {} active", crate::harness_ui::neural_equalizer(self.anim_tick, true), active_bots)
+            } else {
+                " 0 active".to_string()
+            };
+
             let sidebar_lines = vec![
                 Line::from(vec![
                     Span::styled("◖ ", Style::default().fg(Color::Cyan)),
@@ -4699,6 +4716,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     ),
                     Span::styled(format!(" {:.0}t/s", self.last_tok_per_sec), t.dim_text()),
                 ]),
+                Line::from(vec![Span::styled(" KV  : ", label_style), Span::styled(kv_bar, Style::default().fg(kv_color))]),
                 Line::from(""),
                 Line::from(vec![
                     Span::styled("◖ ", Style::default().fg(Color::Magenta)),
@@ -4725,8 +4743,8 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     Span::styled(" ◗", Style::default().fg(Color::LightCyan)),
                 ]),
                 Line::from(vec![
-                    Span::styled(" Active: ", label_style),
-                    Span::styled(format!("{} active", self.subagent_mgr.running_count()), if self.subagent_mgr.running_count() > 0 { Style::default().fg(Color::Green).add_modifier(Modifier::BOLD) } else { value_style }),
+                    Span::styled(" Active:", label_style),
+                    Span::styled(bot_ticker, if active_bots > 0 { Style::default().fg(Color::Green).add_modifier(Modifier::BOLD) } else { value_style }),
                 ]),
                 Line::from(vec![
                     Span::styled(" Cap   : ", label_style),
@@ -4897,7 +4915,11 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                 }
             }
             if !self.current_response_buf.is_empty() {
-                let parsed_lines = Self::render_markdown_lines(&self.current_response_buf, t);
+                let mut parsed_lines = Self::render_markdown_lines(&self.current_response_buf, t);
+                let cursor = crate::harness_ui::streaming_cursor(self.anim_tick);
+                if let Some(last) = parsed_lines.last_mut() {
+                    last.spans.push(Span::styled(cursor, Style::default().fg(Color::LightCyan)));
+                }
                 chat_lines.extend(parsed_lines);
             }
             chat_lines.push(Line::from(""));
@@ -4940,10 +4962,15 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
             (viewport_area, None)
         };
 
+        let vp_border = t.border_style().fg(crate::harness_ui::animated_border_color(
+            self.anim_tick,
+            self.is_generating,
+            t.border_style().fg.unwrap_or(Color::Cyan),
+        ));
         let viewport = Paragraph::new(chat_lines)
             .wrap(Wrap { trim: false })
             .scroll((effective_scroll, 0))
-            .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(scroll_title).border_style(t.border_style()));
+            .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(scroll_title).border_style(vp_border));
         f.render_widget(viewport, chat_area);
 
         if let Some(da) = drawer_area {
@@ -7004,6 +7031,12 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                 f.render_widget(modal, area);
             }
             ActiveModal::None => {}
+        }
+
+        if let Some((ref msg, ts)) = self.toast {
+            if ts.elapsed().as_secs_f32() < 2.5 {
+                crate::harness_ui::render_toast(f, f.area(), msg, t);
+            }
         }
     }
 

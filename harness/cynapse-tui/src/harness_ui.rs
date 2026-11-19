@@ -145,6 +145,54 @@ pub fn render_at_picker(f: &mut Frame, input_area: Rect, matches: &[String], sel
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// 6-bar Braille equalizer synced to generation ticks.
+pub fn neural_equalizer(tick: usize, active: bool) -> &'static str {
+    if !active {
+        return "⣀⣀⣀⣀⣀⣀";
+    }
+    const FRAMES: &[&str] = &["⣀⣤⣶⣿⣶⣤", "⣤⣶⣿⣶⣤⣀", "⣶⣿⣶⣤⣀⣤", "⣿⣶⣤⣀⣤⣶", "⣶⣤⣀⣤⣶⣿", "⣤⣀⣤⣶⣿⣶"];
+    FRAMES[(tick / 2) % FRAMES.len()]
+}
+
+/// Pulses viewport border accent while generating.
+pub fn animated_border_color(tick: usize, active: bool, base: Color) -> Color {
+    if !active {
+        return base;
+    }
+    const PULSE: &[Color] = &[Color::Cyan, Color::LightCyan, Color::Blue, Color::LightCyan];
+    PULSE[(tick / 4) % PULSE.len()]
+}
+
+/// Blinking block cursor for live token streaming.
+pub fn streaming_cursor(tick: usize) -> &'static str {
+    if (tick / 6).is_multiple_of(2) { "▌" } else { " " }
+}
+
+/// Context-window KV fuel gauge (`[████░░░░] 35%`, Cyan -> Yellow -> Red).
+pub fn kv_fuel_gauge(total_chars: usize, ctx_limit: usize) -> (String, Color) {
+    let est_tokens = (total_chars / 4) + 350;
+    let pct = ((est_tokens as f64 / ctx_limit.max(1) as f64) * 100.0).min(100.0) as usize;
+    let filled = ((pct * 8) / 100).min(8);
+    let bar = format!("[{}{}] {}%", "█".repeat(filled), "░".repeat(8 - filled), pct);
+    let color = if pct >= 90 { Color::Red } else if pct >= 75 { Color::Yellow } else { Color::Cyan };
+    (bar, color)
+}
+
+/// Top-right auto-dismissing toast notification pill.
+pub fn render_toast(f: &mut Frame, area: Rect, msg: &str, t: AppTheme) {
+    let w = (msg.chars().count() as u16 + 6).min(area.width.saturating_sub(2)).max(20);
+    let x = area.x + area.width.saturating_sub(w + 1);
+    let toast_area = Rect::new(x, area.y + 3, w, 3);
+    f.render_widget(Clear, toast_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Green))
+        .style(Style::default().bg(t.card_bg()));
+    let p = Paragraph::new(Line::from(Span::styled(format!(" ✓ {} ", msg), Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)))).block(block);
+    f.render_widget(p, toast_area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
