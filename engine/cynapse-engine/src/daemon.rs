@@ -301,6 +301,12 @@ impl LlamaServerDaemon {
         if std::env::var("CYNAPSE_KV_DISK").as_deref() == Ok("1") {
             cmd.arg("--slot-save-path").arg(&kv_dir);
         }
+        if let Ok(cvec) = std::env::var("CYNAPSE_CONTROL_VECTOR") {
+            let cvec_path = PathBuf::from(&cvec);
+            if cvec_path.is_file() {
+                cmd.arg("--control-vector").arg(cvec_path);
+            }
+        }
 
         // Set LD_LIBRARY_PATH to ensure Cynapse libraries and acceleration backends resolve
         let mut ld_dirs = Vec::new();

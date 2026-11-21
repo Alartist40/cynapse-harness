@@ -47,3 +47,24 @@ description = "Export fine-tuned adapter / model to GGUF format for Cynapse Leaf
 command = "python3 runner.py export"
 transport = "stdio"
 concurrency_safe = false
+
+[[tools]]
+name = "soup_steer_cvec"
+description = "Zero-backprop contrast-vector extraction & .cvec.gguf export for llama-server --control-vector"
+command = "python3 runner.py steer_cvec"
+transport = "stdio"
+concurrency_safe = false
+
+[[tools]]
+name = "soup_ablate_lora"
+description = "Directional ablation & exact Rank-1 LoRA synthesis (A = r^T W, B = -s * r)"
+command = "python3 runner.py ablate_lora"
+transport = "stdio"
+concurrency_safe = false
+
+[[tools]]
+name = "soup_neuron_audit"
+description = "Run CHiPS causal head & null-control neuron surgery self-verification"
+command = "python3 runner.py neuron_audit"
+transport = "stdio"
+concurrency_safe = true
