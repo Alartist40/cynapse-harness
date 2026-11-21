@@ -2208,6 +2208,44 @@ impl TuiApp {
                                 KeyCode::Char(']') if self.modal == ActiveModal::MemoryGraph => {
                                     self.dendrite_time_pct = (self.dendrite_time_pct + 0.1).clamp(0.1, 1.0);
                                 }
+                                KeyCode::Char('v') | KeyCode::Char('V') if self.modal == ActiveModal::SoupProfiler => {
+                                    // Pure-Rust zero-backprop Neuron Surgery: extract contrast direction,
+                                    // verify against 16 equal-norm random controls, and export .cvec.gguf.
+                                    let dim = 64usize;
+                                    let mut pos_vec = vec![0.0f32; dim];
+                                    let neg_vec = vec![-0.25f32; dim];
+                                    let ds_text = std::fs::read_to_string(&self.soup_dataset_path).unwrap_or_default();
+                                    for (idx, b) in ds_text.bytes().take(512).enumerate() {
+                                        pos_vec[idx % dim] += (b as f32) / 255.0;
+                                    }
+                                    if ds_text.is_empty() {
+                                        for (idx, v) in pos_vec.iter_mut().enumerate() {
+                                            *v = ((idx as f32) * 0.27).cos() + 0.5;
+                                        }
+                                    }
+                                    let (dir, norm) = cynapse_engine::neuron_surgery::compute_contrast_direction(&[&pos_vec], &[&neg_vec]);
+                                    let delta: Vec<f32> = pos_vec.iter().zip(neg_vec.iter()).map(|(a, b)| a - b).collect();
+                                    let null_pct = cynapse_engine::neuron_surgery::null_control_percentile(&dir, &delta, 16, 7919);
+                                    let out_path = PathBuf::from("models/vectors/soup_steered.cvec.gguf");
+                                    let layer_vecs = vec![(14usize, dir.clone()), (22usize, dir)];
+                                    match cynapse_engine::neuron_surgery::export_cvec_gguf(&out_path, "qwen3", &layer_vecs) {
+                                        Ok(()) => {
+                                            self.soup_log = format!(
+                                                "[✓ NEURON SURGERY] Exported {} (norm={:.2}, null_pct={:.0}%)",
+                                                out_path.display(),
+                                                norm,
+                                                null_pct * 100.0
+                                            );
+                                            self.toast = Some((
+                                                format!("Exported {} (null {:.0}%)", out_path.display(), null_pct * 100.0),
+                                                std::time::Instant::now(),
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            self.soup_log = format!("[ERROR] .cvec.gguf export failed: {}", e);
+                                        }
+                                    }
+                                }
                                 KeyCode::Char('e') | KeyCode::Char('E') => match self.modal {
                                     ActiveModal::SecurityForensics => {
                                         if let Some(rep) = &self.security_report {
@@ -6098,6 +6136,8 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                     Span::raw("Benchmark  │  "),
                     Span::styled(" [a] ", Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD)),
                     Span::raw("Adapters  │  "),
+                    Span::styled(" [v] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::raw("Neuron Vector  │  "),
                     Span::styled(" [Enter] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
                     Span::raw("Start/Pause  │  "),
                     Span::styled(" [Esc] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),

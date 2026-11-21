@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub mod daemon;
 pub mod slots;
 pub mod speculative;
+pub use leafcutter::neuron_surgery;
 
 /// Dynamic headroom reserve calculation: scales based on model parameter/disk footprint.
 pub fn compute_reserve_bytes(model_bytes: u64) -> u64 {
