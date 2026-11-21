@@ -186,55 +186,6 @@ def handle_quantize(args: dict) -> None:
     }, indent=2))
 
 
-def handle_steer_cvec(args: dict) -> None:
-    import numpy as np
-    from neuron_surgery import compute_contrast_direction, export_cvec_gguf, null_control_percentile
-
-    arch = args.get("arch", "qwen3")
-    out_path = args.get("output", os.path.join(REPO_ROOT, "models", "vectors", "steered.cvec.gguf"))
-    dim = int(args.get("dim", 64))
-    layers = args.get("layers", [14, 22])
-    pos = np.asarray(args.get("pos_acts") or np.ones((4, dim), dtype=np.float32), dtype=np.float32)
-    neg = np.asarray(args.get("neg_acts") or np.zeros((4, dim), dtype=np.float32), dtype=np.float32)
-    r, norm = compute_contrast_direction(pos, neg)
-    null_pct = null_control_percentile(r, pos.mean(axis=0) - neg.mean(axis=0))
-    layer_vecs = {int(l): r * float(args.get("alpha", 1.0)) for l in layers}
-    written = export_cvec_gguf(out_path, arch, layer_vecs)
-    print(json.dumps({
-        "status": "SUCCESS",
-        "cvec_path": written,
-        "layers": [int(l) for l in layers],
-        "norm": norm,
-        "null_pct": null_pct,
-    }, indent=2))
-
-
-def handle_ablate_lora(args: dict) -> None:
-    import numpy as np
-    from neuron_surgery import compute_contrast_direction, rank1_ablate_lora
-
-    dim = int(args.get("dim", 64))
-    in_dim = int(args.get("in_dim", dim))
-    scale = float(args.get("scale", 1.0))
-    pos = np.asarray(args.get("pos_acts") or np.ones((4, dim), dtype=np.float32), dtype=np.float32)
-    neg = np.asarray(args.get("neg_acts") or np.zeros((4, dim), dtype=np.float32), dtype=np.float32)
-    w = np.asarray(args.get("weight") or np.eye(dim, in_dim, dtype=np.float32), dtype=np.float32)
-    r, norm = compute_contrast_direction(pos, neg)
-    lora_a, lora_b = rank1_ablate_lora(w, r, scale=scale)
-    print(json.dumps({
-        "status": "SUCCESS",
-        "lora_a_shape": list(lora_a.shape),
-        "lora_b_shape": list(lora_b.shape),
-        "direction_norm": norm,
-        "scale": scale,
-    }, indent=2))
-
-
-def handle_neuron_audit(args: dict) -> None:
-    from neuron_surgery import run_selftest
-    print(json.dumps(run_selftest(), indent=2))
-
-
 def main() -> None:
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No action specified"}))
@@ -256,9 +207,6 @@ def main() -> None:
         "export": handle_export,
         "quantize": handle_quantize,
         "synth": handle_synth,
-        "steer_cvec": handle_steer_cvec,
-        "ablate_lora": handle_ablate_lora,
-        "neuron_audit": handle_neuron_audit,
     }
     handler = handlers.get(action)
     if handler:
