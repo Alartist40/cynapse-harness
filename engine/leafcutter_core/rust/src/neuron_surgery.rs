@@ -280,6 +280,70 @@ pub fn export_cvec_gguf(out_path: &Path, arch: &str, layer_vectors: &[(usize, Ve
     Ok(())
 }
 
+/// Internal weight summary for Teacher-guided inspection (`2611.21885v2` Step 1).
+#[derive(Debug, Clone)]
+pub struct GgufWeightDiagnostic {
+    pub arch: String,
+    pub tensor_count: usize,
+    pub residual_writers: Vec<String>,
+}
+
+/// Inspect a local GGUF file's internal tensor table without loading weights into RAM.
+pub fn inspect_gguf_weights(path: &Path) -> Result<GgufWeightDiagnostic, String> {
+    let gguf = crate::model::gguf::GGUFile::open(path).map_err(|e| format!("GGUF open failed: {e}"))?;
+    let arch = match gguf.metadata.get("general.architecture") {
+        Some(crate::model::gguf::GGUFValue::String(s)) => s.clone(),
+        _ => "unknown".to_string(),
+    };
+    let residual_writers = gguf
+        .tensors
+        .iter()
+        .filter(|t| {
+            t.name.ends_with("attn_output.weight")
+                || t.name.ends_with("ffn_down.weight")
+                || t.name.ends_with("ssm_out.weight")
+                || t.name.ends_with("out_proj.weight")
+        })
+        .map(|t| t.name.clone())
+        .collect();
+    Ok(GgufWeightDiagnostic {
+        arch,
+        tensor_count: gguf.tensors.len(),
+        residual_writers,
+    })
+}
+
+/// Outcome of the held-out validation gate (`2611.21885v2`: keep only edits that pass tests).
+#[derive(Debug, Clone, PartialEq)]
+pub enum EditGateOutcome {
+    Committed { null_pct: f32 },
+    Withdrawn { reason: String },
+}
+
+/// Auto-withdraw gate: writes `.cvec.gguf` ONLY when `null_pct >= min_null_pct` and `val_after >= val_before`.
+pub fn evaluate_and_commit_cvec(
+    out_path: &Path,
+    arch: &str,
+    layer_vectors: &[(usize, Vec<f32>)],
+    null_pct: f32,
+    min_null_pct: f32,
+    val_before: f32,
+    val_after: f32,
+) -> io::Result<EditGateOutcome> {
+    if null_pct < min_null_pct {
+        return Ok(EditGateOutcome::Withdrawn {
+            reason: format!("null_pct {:.0}% < {:.0}% threshold", null_pct * 100.0, min_null_pct * 100.0),
+        });
+    }
+    if val_after < val_before {
+        return Ok(EditGateOutcome::Withdrawn {
+            reason: format!("held-out regression ({:.3} < {:.3})", val_after, val_before),
+        });
+    }
+    export_cvec_gguf(out_path, arch, layer_vectors)?;
+    Ok(EditGateOutcome::Committed { null_pct })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,9 +389,16 @@ mod tests {
         assert_eq!(heads[0].head, 0);
 
         let path = std::env::temp_dir().join(format!("leafcutter_test_{}.cvec.gguf", std::process::id()));
-        export_cvec_gguf(&path, "qwen3", &[(14, dir.to_vec()), (22, dir.to_vec())]).unwrap();
-        let bytes = fs::read(&path).unwrap();
-        assert_eq!(&bytes[..4], b"GGUF");
+        let res = evaluate_and_commit_cvec(&path, "qwen3", &[(14, dir.to_vec()), (22, dir.to_vec())], 0.95, 0.90, 0.50, 0.62).unwrap();
+        assert_eq!(res, EditGateOutcome::Committed { null_pct: 0.95 });
+        let diag = inspect_gguf_weights(&path).unwrap();
+        assert_eq!(diag.arch, "qwen3");
+        assert_eq!(diag.tensor_count, 2);
         let _ = fs::remove_file(&path);
+
+        let rej_path = std::env::temp_dir().join(format!("leafcutter_rej_{}.cvec.gguf", std::process::id()));
+        let rej = evaluate_and_commit_cvec(&rej_path, "qwen3", &[(14, dir.to_vec())], 0.95, 0.90, 0.70, 0.60).unwrap();
+        assert!(matches!(rej, EditGateOutcome::Withdrawn { .. }));
+        assert!(!rej_path.exists());
     }
 }

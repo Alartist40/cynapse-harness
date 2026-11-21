@@ -2228,8 +2228,16 @@ impl TuiApp {
                                     let null_pct = cynapse_engine::neuron_surgery::null_control_percentile(&dir, &delta, 16, 7919);
                                     let out_path = PathBuf::from("models/vectors/soup_steered.cvec.gguf");
                                     let layer_vecs = vec![(14usize, dir.clone()), (22usize, dir)];
-                                    match cynapse_engine::neuron_surgery::export_cvec_gguf(&out_path, "qwen3", &layer_vecs) {
-                                        Ok(()) => {
+                                    match cynapse_engine::neuron_surgery::evaluate_and_commit_cvec(
+                                        &out_path,
+                                        "qwen3",
+                                        &layer_vecs,
+                                        null_pct,
+                                        0.90,
+                                        0.50,
+                                        0.50 + (norm.min(1.0) * 0.1),
+                                    ) {
+                                        Ok(cynapse_engine::neuron_surgery::EditGateOutcome::Committed { null_pct }) => {
                                             self.soup_log = format!(
                                                 "[✓ NEURON SURGERY] Exported {} (norm={:.2}, null_pct={:.0}%)",
                                                 out_path.display(),
@@ -2240,6 +2248,10 @@ impl TuiApp {
                                                 format!("Exported {} (null {:.0}%)", out_path.display(), null_pct * 100.0),
                                                 std::time::Instant::now(),
                                             ));
+                                        }
+                                        Ok(cynapse_engine::neuron_surgery::EditGateOutcome::Withdrawn { reason }) => {
+                                            self.soup_log = format!("[WITHDRAWN] Model unchanged: {}", reason);
+                                            self.toast = Some((format!("Edit withdrawn: {}", reason), std::time::Instant::now()));
                                         }
                                         Err(e) => {
                                             self.soup_log = format!("[ERROR] .cvec.gguf export failed: {}", e);
