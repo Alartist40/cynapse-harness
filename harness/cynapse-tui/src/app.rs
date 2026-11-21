@@ -5657,7 +5657,13 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                 f.render_widget(Paragraph::new(Line::from(action_spans)), v_chunks[2]);
             }
             ActiveModal::SoupProfiler => {
-                let area = centered_rect(94, 88, f.area());
+                // Dedicated full-canvas studio below the top status bar (no background chat/sidebar overlap).
+                let area = Rect {
+                    x: 0,
+                    y: main_chunks[1].y,
+                    width: f.area().width,
+                    height: main_chunks[1].height.saturating_add(main_chunks[2].height),
+                };
                 f.render_widget(Clear, area);
 
                 let bg_block = Block::default().style(Style::default().bg(t.modal_bg()));
