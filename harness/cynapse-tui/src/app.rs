@@ -12,11 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use anyhow::Result;
-use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers, MouseEventKind},
-    execute,
-    terminal::EnterAlternateScreen,
-};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -1219,10 +1215,10 @@ impl TuiApp {
         self.preload_active_model();
 
         let _guard = TuiRuntimeGuard::enter()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        let stdout = io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
+        terminal.clear()?;
 
         self.event_loop(&mut terminal).await
     }
@@ -2749,8 +2745,8 @@ impl TuiApp {
                             KeyCode::PageDown => {
                                 self.scroll_down(5);
                             }
-                            KeyCode::Up => {
-                                if (self.input.is_empty() || self.history_idx.is_some()) && !self.prompt_history.is_empty() {
+                            KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                if !self.prompt_history.is_empty() {
                                     let next = match self.history_idx {
                                         None => self.prompt_history.len().saturating_sub(1),
                                         Some(i) => i.saturating_sub(1),
@@ -2758,11 +2754,9 @@ impl TuiApp {
                                     self.history_idx = Some(next);
                                     self.input = self.prompt_history[next].clone();
                                     self.input_cursor = self.input.len();
-                                } else {
-                                    self.scroll_up(1);
                                 }
                             }
-                            KeyCode::Down => {
+                            KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 if let Some(i) = self.history_idx {
                                     if i + 1 < self.prompt_history.len() {
                                         self.history_idx = Some(i + 1);
@@ -2773,9 +2767,13 @@ impl TuiApp {
                                         self.input.clear();
                                         self.input_cursor = 0;
                                     }
-                                } else {
-                                    self.scroll_down(1);
                                 }
+                            }
+                            KeyCode::Up => {
+                                self.scroll_up(2);
+                            }
+                            KeyCode::Down => {
+                                self.scroll_down(2);
                             }
                             KeyCode::Enter => {
                                 if self.is_generating {
@@ -4502,7 +4500,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
         // Dynamic Input Box Height Calculation (Expand downward dynamically as prompt grows)
         let full_width = f.area().width as usize;
         let input_inner_width = full_width.saturating_sub(2).max(1);
-        let input_total_cols = 4 + self.input.chars().count();
+        let input_total_cols = UnicodeWidthStr::width("・ ") + UnicodeWidthStr::width(self.input.as_str());
         let wrapped_input_lines = (input_total_cols + input_inner_width - 1) / input_inner_width;
         let input_height = (wrapped_input_lines as u16 + 2).clamp(3, 8);
 
@@ -5035,7 +5033,7 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
             let inner_w = input_area.width.saturating_sub(2) as usize;
             if inner_w > 0 {
                 let safe_cursor = self.input.char_indices().map(|(i, _)| i).chain(std::iter::once(self.input.len())).filter(|&i| i <= self.input_cursor).last().unwrap_or(0);
-                let total_offset = 4 + self.input[..safe_cursor].chars().count();
+                let total_offset = UnicodeWidthStr::width("・ ") + UnicodeWidthStr::width(&self.input[..safe_cursor]);
                 let row_offset = (total_offset / inner_w) as u16;
                 let col_offset = (total_offset % inner_w) as u16;
                 let cursor_x = input_area.x + 1 + col_offset;

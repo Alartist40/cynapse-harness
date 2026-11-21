@@ -96,6 +96,8 @@ pub fn check_for_updates(repo_dir: &Path) -> Result<Option<UpdateInfo>> {
         let is_ancestor = Command::new("git")
             .args(["merge-base", "--is-ancestor", &remote_commit, "HEAD"])
             .current_dir(repo_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
@@ -151,6 +153,8 @@ where
     let is_ancestor = Command::new("git")
         .args(["merge-base", "--is-ancestor", &remote_ref, "HEAD"])
         .current_dir(repo_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
