@@ -1476,7 +1476,10 @@ pub async fn try_llama_server_stream(
         "repeat_last_n": s.repeat_last_n
     });
     if let Some(budget) = reasoning_effort().budget() {
-        payload["reasoning_budget"] = serde_json::json!(budget);
+        payload["reasoning_budget_tokens"] = serde_json::json!(budget);
+        if budget == 0 {
+            payload["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": false });
+        }
     }
 
     let start = Instant::now();
