@@ -66,7 +66,11 @@ fn run_single_model(llama_cli: &Path, model_path: &Path, max_tokens: usize) -> R
                 "--no-display-prompt",
             ])
             .output()?;
-        let text = String::from_utf8_lossy(&res.stdout).to_string();
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&res.stdout),
+            String::from_utf8_lossy(&res.stderr)
+        );
         let (prompt_tps, gen_tps) = parse_llama_tps(&text);
         out.push(EvalCaseResult {
             id: (*id).to_string(),

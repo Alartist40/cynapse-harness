@@ -1,0 +1,28 @@
+base: LiquidAI/LFM3-1.7B
+task: dpo
+
+data:
+  train: data/glia_v2_dpo.jsonl
+  format: dpo
+  max_length: 512
+
+training:
+  epochs: 1
+  batch_size: 1
+  gradient_accumulation_steps: 2
+  gradient_checkpointing: true
+  dpo_beta: 0.1
+  lr: 5e-5
+  quantization: none
+  lora:
+    r: 8
+    alpha: 16
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - in_proj
+      - out_proj
+
+output: output/glia_v2_dpo

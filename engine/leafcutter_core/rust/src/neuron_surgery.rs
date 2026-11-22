@@ -344,6 +344,31 @@ pub fn evaluate_and_commit_cvec(
     Ok(EditGateOutcome::Committed { null_pct })
 }
 
+/// Ranked layer activation contrast from live student pass vs. fail probes (`gne writers` pattern).
+#[derive(Debug, Clone)]
+pub struct LayerProbeScore {
+    pub layer: usize,
+    pub contrast_norm: f32,
+    pub direction: Vec<f32>,
+}
+
+/// Rank model layers by how strongly their activations diverge between passing and failing runs.
+pub fn probe_weak_layers(layer_pairs: &[(usize, Vec<f32>, Vec<f32>)]) -> Vec<LayerProbeScore> {
+    let mut scored: Vec<LayerProbeScore> = layer_pairs
+        .iter()
+        .map(|(layer, pos, neg)| {
+            let (direction, contrast_norm) = compute_contrast_direction(&[pos.as_slice()], &[neg.as_slice()]);
+            LayerProbeScore {
+                layer: *layer,
+                contrast_norm,
+                direction,
+            }
+        })
+        .collect();
+    scored.sort_by(|a, b| b.contrast_norm.partial_cmp(&a.contrast_norm).unwrap_or(std::cmp::Ordering::Equal));
+    scored
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,5 +425,12 @@ mod tests {
         let rej = evaluate_and_commit_cvec(&rej_path, "qwen3", &[(14, dir.to_vec())], 0.95, 0.90, 0.70, 0.60).unwrap();
         assert!(matches!(rej, EditGateOutcome::Withdrawn { .. }));
         assert!(!rej_path.exists());
+
+        let ranked = probe_weak_layers(&[
+            (3, vec![0.1, 0.1], vec![0.1, 0.0]),
+            (18, vec![2.5, 0.0], vec![-1.5, 0.0]),
+        ]);
+        assert_eq!(ranked[0].layer, 18);
+        assert!(ranked[0].contrast_norm > ranked[1].contrast_norm);
     }
 }

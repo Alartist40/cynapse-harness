@@ -3257,6 +3257,29 @@ impl TuiApp {
                                     continue;
                                 }
 
+                                if trimmed == "/soup harvest" || trimmed.starts_with("/soup harvest ") {
+                                    let target = trimmed.trim_start_matches("/soup harvest").trim();
+                                    let model_name = if target.is_empty() {
+                                        self.active_model_name.clone()
+                                    } else {
+                                        target.to_string()
+                                    };
+                                    let model_path = self.models_dir.join(&model_name);
+                                    let cli = cynapse_core::eval::resolve_llama_cli();
+                                    let out_jsonl = PathBuf::from("data/glia_failures.jsonl");
+                                    self.messages.push(ChatMessage {
+                                        role: "system".into(),
+                                        content: format!("[Soup Harvest] Grading {} on universal cyber suite and harvesting weak points to {}...", model_name, out_jsonl.display()),
+                                        thinking: None,
+                                    });
+                                    std::thread::spawn(move || {
+                                        if let Ok(summary) = cynapse_core::cyber_eval::evaluate_cyber_suite(&cli, &model_path, None, 220) {
+                                            let _ = cynapse_core::harvest::harvest_failures(&summary, &out_jsonl, 0.75);
+                                        }
+                                    });
+                                    continue;
+                                }
+
                                 if trimmed == "/soup install" {
                                     let venv_soup = PathBuf::from("synapses/soup/.venv/bin/soup");
                                     if venv_soup.exists() {
