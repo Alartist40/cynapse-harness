@@ -122,6 +122,7 @@ pub fn evaluate_cyber_suite(
         let mut cmd = Command::new(llama_cli);
         cmd.args([
             "--single-turn",
+            "--simple-io",
             "-m",
             &model_path.to_string_lossy(),
             "-p",

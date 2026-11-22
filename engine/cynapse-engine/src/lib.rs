@@ -102,6 +102,54 @@ impl Default for SamplingParams {
 
 static SAMPLING: OnceLock<StdMutex<SamplingParams>> = OnceLock::new();
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningEffort {
+    Auto,
+    None,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    pub fn budget(self) -> Option<i32> {
+        match self {
+            Self::Auto => None,
+            Self::None => Some(0),
+            Self::Low => Some(96),
+            Self::Medium => Some(256),
+            Self::High => Some(1024),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none (0 thinking tokens)",
+            Self::Low => "low (96 thinking tokens)",
+            Self::Medium => "medium (256 thinking tokens)",
+            Self::High => "high (1024 thinking tokens)",
+        }
+    }
+}
+
+static REASONING_EFFORT: OnceLock<StdMutex<ReasoningEffort>> = OnceLock::new();
+
+pub fn reasoning_effort() -> ReasoningEffort {
+    REASONING_EFFORT
+        .get_or_init(|| StdMutex::new(ReasoningEffort::Auto))
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(ReasoningEffort::Auto)
+}
+
+pub fn set_reasoning_effort(effort: ReasoningEffort) {
+    let lock = REASONING_EFFORT.get_or_init(|| StdMutex::new(ReasoningEffort::Auto));
+    if let Ok(mut g) = lock.lock() {
+        *g = effort;
+    }
+}
+
 /// Process-wide sampling config (set once from cynapse.toml at startup).
 pub fn sampling() -> SamplingParams {
     let lock = SAMPLING.get_or_init(|| StdMutex::new(SamplingParams::default()));
@@ -1401,7 +1449,7 @@ pub async fn try_llama_server_stream(
     let (slot_id, cache_prompt) = slots::SlotManager::slot_params(slots::SlotPurpose::Interactive);
     let s = sampling();
 
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "messages": messages,
         "stream": true,
         "cache_prompt": cache_prompt,
@@ -1413,6 +1461,9 @@ pub async fn try_llama_server_stream(
         "repeat_penalty": s.repeat_penalty,
         "repeat_last_n": s.repeat_last_n
     });
+    if let Some(budget) = reasoning_effort().budget() {
+        payload["reasoning_budget"] = serde_json::json!(budget);
+    }
 
     let start = Instant::now();
     let resp = loop {

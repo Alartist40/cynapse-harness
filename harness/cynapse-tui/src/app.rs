@@ -3047,6 +3047,36 @@ impl TuiApp {
                                     continue;
                                 }
 
+                                if trimmed == "/effort" || trimmed.starts_with("/effort ") {
+                                    let arg = trimmed.trim_start_matches("/effort").trim().to_lowercase();
+                                    let effort = match arg.as_str() {
+                                        "none" | "0" | "off" => Some(cynapse_engine::ReasoningEffort::None),
+                                        "low" | "min" => Some(cynapse_engine::ReasoningEffort::Low),
+                                        "med" | "medium" => Some(cynapse_engine::ReasoningEffort::Medium),
+                                        "high" | "max" => Some(cynapse_engine::ReasoningEffort::High),
+                                        "auto" => Some(cynapse_engine::ReasoningEffort::Auto),
+                                        _ => None,
+                                    };
+                                    if let Some(e) = effort {
+                                        cynapse_engine::set_reasoning_effort(e);
+                                        self.messages.push(ChatMessage {
+                                            role: "system".into(),
+                                            content: format!("[Effort] Reasoning effort set to: {}", e.label()),
+                                            thinking: None,
+                                        });
+                                    } else {
+                                        self.messages.push(ChatMessage {
+                                            role: "system".into(),
+                                            content: format!(
+                                                "[Effort] Current: {}. Usage: /effort <none|low|med|high|auto>",
+                                                cynapse_engine::reasoning_effort().label()
+                                            ),
+                                            thinking: None,
+                                        });
+                                    }
+                                    continue;
+                                }
+
                                 if trimmed == "/spec" {
                                     self.speculative_decoding_enabled = !self.speculative_decoding_enabled;
                                     let status_str = if self.speculative_decoding_enabled {

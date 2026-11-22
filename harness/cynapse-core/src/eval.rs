@@ -55,6 +55,7 @@ fn run_single_model(llama_cli: &Path, model_path: &Path, max_tokens: usize) -> R
         let res = Command::new(llama_cli)
             .args([
                 "--single-turn",
+                "--simple-io",
                 "-m",
                 &model_path.to_string_lossy(),
                 "-p",

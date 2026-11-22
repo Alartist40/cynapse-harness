@@ -27,6 +27,7 @@ pub mod init;
 
 pub mod inference;
 pub mod kernels;
+pub mod looped_depth;
 
 #[cfg(feature = "llama-ffi")]
 pub mod llama_ffi;
