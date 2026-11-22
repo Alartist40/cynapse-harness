@@ -1055,12 +1055,18 @@ struct StreamChoice {
 }
 
 #[derive(Deserialize, Default)]
+struct StreamTimings {
+    predicted_per_second: Option<f64>,
+}
+
+#[derive(Deserialize, Default)]
 struct StreamChunk {
     response: Option<String>,
     content: Option<String>,
     thinking: Option<String>,
     message: Option<StreamMessage>,
     choices: Option<Vec<StreamChoice>>,
+    timings: Option<StreamTimings>,
     #[allow(dead_code)]
     done: Option<bool>,
     #[allow(dead_code)]
@@ -1272,14 +1278,14 @@ pub fn query_native_leafcutter_stream(
 
     let (_text, tokens) = engine
         .generate_stream(&full_prompt, 4096, s.temperature, s.top_p, |token| {
-            if token.contains("<think>") {
+            if token.contains("<think>") || token.contains("[Start thinking]") {
                 is_thinking = true;
-                let clean = token.replace("<think>", "");
+                let clean = token.replace("<think>", "").replace("[Start thinking]", "");
                 if !clean.is_empty() {
                     on_token(TokenType::Thinking, &clean);
                 }
-            } else if token.contains("</think>") {
-                let clean = token.replace("</think>", "");
+            } else if token.contains("</think>") || token.contains("[End thinking]") {
+                let clean = token.replace("</think>", "").replace("[End thinking]", "");
                 if !clean.is_empty() {
                     on_token(TokenType::Thinking, &clean);
                 }
@@ -1329,6 +1335,7 @@ async fn parse_http_stream(
     let mut stream = res.bytes_stream();
     let mut tokens_generated = 0usize;
     let mut first_token_time: Option<Instant> = None;
+    let mut server_tps: Option<f64> = None;
     let _is_reasoning = is_reasoning_model(model_name);
     let mut is_thinking = false;
     let mut buffer = String::with_capacity(65536);
@@ -1355,6 +1362,11 @@ async fn parse_http_stream(
             }
 
             if let Ok(parsed) = serde_json::from_str::<StreamChunk>(&line) {
+                if let Some(tps) = parsed.timings.as_ref().and_then(|t| t.predicted_per_second) {
+                    if tps > 0.0 {
+                        server_tps = Some(tps);
+                    }
+                }
                 if let Some((extracted_type, token)) = parsed.extract_token_and_type() {
                     if !token.is_empty() {
                         tokens_generated += 1;
@@ -1362,14 +1374,14 @@ async fn parse_http_stream(
                             first_token_time = Some(Instant::now());
                         }
 
-                        if token.contains("<think>") {
+                        if token.contains("<think>") || token.contains("[Start thinking]") {
                             is_thinking = true;
-                            let clean = token.replace("<think>", "");
+                            let clean = token.replace("<think>", "").replace("[Start thinking]", "");
                             if !clean.is_empty() {
                                 on_token(TokenType::Thinking, &clean);
                             }
-                        } else if token.contains("</think>") {
-                            let clean = token.replace("</think>", "");
+                        } else if token.contains("</think>") || token.contains("[End thinking]") {
+                            let clean = token.replace("</think>", "").replace("[End thinking]", "");
                             if !clean.is_empty() {
                                 on_token(TokenType::Thinking, &clean);
                             }
@@ -1389,7 +1401,9 @@ async fn parse_http_stream(
     }
 
     let elapsed_sec = start.elapsed().as_secs_f64().max(0.001);
-    let tok_per_sec = if tokens_generated > 1 {
+    let tok_per_sec = if let Some(tps) = server_tps {
+        tps
+    } else if tokens_generated > 1 {
         if let Some(ft) = first_token_time {
             let gen_elapsed = ft.elapsed().as_secs_f64().max(0.001);
             (tokens_generated - 1) as f64 / gen_elapsed
@@ -1664,19 +1678,23 @@ pub async fn preload_model(endpoint: &str, model_name: &str) -> Result<()> {
         .unwrap_or(99);
     let ctx_size = engine_ctx_size();
 
-    // 1. Managed llama-server daemon preloading and pinning into RAM
+    // 1. Managed llama-server daemon preloading and pinning into RAM (offloads prior model on switch)
     let daemon_port = daemon::DEFAULT_DAEMON_PORT;
     if let Some(local_path) = find_model_file_path(model_name) {
         if local_path.is_file() {
-            if daemon::LlamaServerDaemon::is_healthy(daemon_port) {
-                engine_log(&format!("LlamaServerDaemon already active and healthy on port {}", daemon_port));
+            let file_mb = std::fs::metadata(&local_path).map(|m| m.len() / (1024 * 1024)).unwrap_or(0);
+            let avail_mb = available_ram_mb();
+            // Guard against loading a model larger than available RAM (+ 1024 MB headroom)
+            if file_mb > 0 && avail_mb > 0 && file_mb + 1024 > avail_mb {
+                anyhow::bail!(
+                    "RAM guard: '{}' needs ~{} MB but only {} MB is available",
+                    model_name, file_mb, avail_mb
+                );
+            }
+            engine_log(&format!("Ensuring model '{}' via LlamaServerDaemon on port {}", model_name, daemon_port));
+            if daemon::LlamaServerDaemon::get_or_spawn_daemon(&local_path, daemon_port) {
+                engine_log(&format!("LlamaServerDaemon active for '{}' on port {}", model_name, daemon_port));
                 return Ok(());
-            } else {
-                engine_log(&format!("Spawning and pinning model '{}' via LlamaServerDaemon on port {}", model_name, daemon_port));
-                if daemon::LlamaServerDaemon::get_or_spawn_daemon(&local_path, daemon_port) {
-                    engine_log(&format!("LlamaServerDaemon successfully spawned and pinned in RAM on port {}", daemon_port));
-                    return Ok(());
-                }
             }
         }
     }

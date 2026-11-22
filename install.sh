@@ -141,6 +141,9 @@ if [ -f "${RELEASE_BIN}" ]; then
     rm -f "${BIN_DIR}/cynapse"
     cp "${RELEASE_BIN}" "${BIN_DIR}/cynapse"
     chmod +x "${BIN_DIR}/cynapse"
+    if [ -d "${HOME}/.cargo/bin" ]; then
+        ln -sf "${BIN_DIR}/cynapse" "${HOME}/.cargo/bin/cynapse"
+    fi
     echo "   [✓] Installed release binary to ${BIN_DIR}/cynapse"
 else
     echo "   [!] Failed to locate built binary at ${RELEASE_BIN}"

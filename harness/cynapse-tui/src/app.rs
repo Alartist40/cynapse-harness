@@ -4398,6 +4398,18 @@ impl TuiApp {
                 });
             }
         }
+        // Sort lightweight Q4 models first so startup doesn't accidentally load 9B+ on low-RAM SBCs
+        items.sort_by(|a, b| {
+            let score = |m: &ModelItem| -> (u8, String) {
+                let n = m.name.to_lowercase();
+                let tier = if n.contains("glia-1.7b-v1.5-q4") { 0 }
+                    else if n.contains("q4") && !n.contains("9b") { 1 }
+                    else if !n.contains("9b") { 2 }
+                    else { 3 };
+                (tier, n)
+            };
+            score(a).cmp(&score(b))
+        });
         items
     }
 
@@ -4456,6 +4468,18 @@ impl TuiApp {
                 }
             }
         }
+        // Sort lightweight Q4 models first so startup doesn't accidentally load 9B+ on low-RAM SBCs
+        items.sort_by(|a, b| {
+            let score = |m: &ModelItem| -> (u8, String) {
+                let n = m.name.to_lowercase();
+                let tier = if n.contains("glia-1.7b-v1.5-q4") { 0 }
+                    else if n.contains("q4") && !n.contains("9b") { 1 }
+                    else if !n.contains("9b") { 2 }
+                    else { 3 };
+                (tier, n)
+            };
+            score(a).cmp(&score(b))
+        });
         items
     }
 
@@ -4777,28 +4801,27 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
             };
 
             let label_style = t.dim_text();
-            let value_style = Style::default().fg(Color::White);
-            let section_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+            let value_style = t.assistant_text();
+            let primary_accent = t.active_border_style().add_modifier(Modifier::BOLD);
+            let secondary_accent = t.active_model();
 
             let kv_chars: usize = self.messages.iter().map(|m| m.content.len()).sum();
-            let (kv_bar, kv_color) = crate::harness_ui::kv_fuel_gauge(kv_chars, 8192);
+            let (kv_bar, _) = crate::harness_ui::kv_fuel_gauge(kv_chars, 8192);
             let active_bots = self.subagent_mgr.running_count();
             let bot_ticker = if active_bots > 0 {
-                format!(" {} {} active", crate::harness_ui::neural_equalizer(self.anim_tick, true), active_bots)
+                format!(" {} active", active_bots)
             } else {
                 " 0 active".to_string()
             };
 
             let sidebar_lines = vec![
                 Line::from(vec![
-                    Span::styled("◖ ", Style::default().fg(Color::Cyan)),
-                    Span::styled("TELEMETRY", section_style),
-                    Span::styled(" ◗", Style::default().fg(Color::Cyan)),
+                    Span::styled("◖ TELEMETRY ◗", primary_accent),
                 ]),
                 Line::from(vec![Span::styled(" CPU : ", label_style), Span::styled(format!("{}c", self.hw_info.cpu_cores), value_style), Span::styled(format!(" {}", cpu_short), t.dim_text())]),
                 Line::from(vec![Span::styled(" RAM : ", label_style), Span::styled(format!("{:.1}/{:.1}G", used_gb, total_gb), value_style)]),
-                Line::from(vec![Span::styled(" Bar : ", label_style), Span::styled(format!("{}", ram_bar_str), Style::default().fg(Color::Cyan))]),
-                Line::from(vec![Span::styled(" GPU : ", label_style), Span::styled(&self.hw_info.gpu_info, Style::default().fg(Color::Green))]),
+                Line::from(vec![Span::styled(" Bar : ", label_style), Span::styled(ram_bar_str, secondary_accent)]),
+                Line::from(vec![Span::styled(" GPU : ", label_style), Span::styled(&self.hw_info.gpu_info, value_style)]),
                 Line::from(vec![
                     Span::styled(" Pwr : ", label_style),
                     Span::styled(
@@ -4807,61 +4830,45 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                             cynapse_core::power::PowerSource::AcPower => "AC Power (Max)",
                             cynapse_core::power::PowerSource::Unknown => "Auto Balanced",
                         },
-                        match cynapse_core::power::PowerThrottler::new().detect_power_source() {
-                            cynapse_core::power::PowerSource::Battery => Style::default().fg(Color::Yellow),
-                            _ => Style::default().fg(Color::Green),
-                        },
+                        value_style,
                     ),
                 ]),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("◖ ", Style::default().fg(Color::Yellow)),
-                    Span::styled("ACTIVE MODEL", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                    Span::styled(" ◗", Style::default().fg(Color::Yellow)),
+                    Span::styled("◖ ACTIVE MODEL ◗", primary_accent),
                 ]),
-                Line::from(vec![Span::styled(" Name: ", label_style), Span::styled(if self.active_model_name.len() > 18 { format!("{}...", &self.active_model_name[..16]) } else { self.active_model_name.clone() }, t.active_model())]),
-                Line::from(vec![Span::styled(" Spec: ", label_style), Span::styled(&self.active_model_quant, Style::default().fg(Color::Green)), Span::styled(" │ ", t.dim_text()), Span::styled(&self.active_model_size, Style::default().fg(Color::LightMagenta))]),
+                Line::from(vec![Span::styled(" Name: ", label_style), Span::styled(if self.active_model_name.len() > 18 { format!("{}...", &self.active_model_name[..16]) } else { self.active_model_name.clone() }, secondary_accent)]),
+                Line::from(vec![Span::styled(" Spec: ", label_style), Span::styled(&self.active_model_quant, value_style), Span::styled(" │ ", t.dim_text()), Span::styled(&self.active_model_size, value_style)]),
                 Line::from(vec![
                     Span::styled(" Tier: ", label_style),
-                    Span::styled(
-                        self.active_tier.label(),
-                        match self.active_tier {
-                            EngineTier::Tier1Fast => Style::default().fg(Color::Green),
-                            EngineTier::Tier2LargeGguf => Style::default().fg(Color::Cyan),
-                            EngineTier::Tier3LargeSafetensor => Style::default().fg(Color::Magenta),
-                        },
-                    ),
+                    Span::styled(self.active_tier.label(), secondary_accent),
                     Span::styled(format!(" {:.0}t/s", self.last_tok_per_sec), t.dim_text()),
                 ]),
-                Line::from(vec![Span::styled(" KV  : ", label_style), Span::styled(kv_bar, Style::default().fg(kv_color))]),
+                Line::from(vec![Span::styled(" KV  : ", label_style), Span::styled(kv_bar, primary_accent)]),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("◖ ", Style::default().fg(Color::Magenta)),
-                    Span::styled("DENDRITE MEMORY", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                    Span::styled(" ◗", Style::default().fg(Color::Magenta)),
+                    Span::styled("◖ DENDRITE MEMORY ◗", primary_accent),
                 ]),
                 Line::from(vec![
                     Span::styled(" State: ", label_style),
                     if self.store.is_some() {
-                        Span::styled(format!("Connected ({} nodes)", self.graph.all().len()), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+                        Span::styled(format!("Connected ({} nodes)", self.graph.all().len()), secondary_accent)
                     } else {
-                        Span::styled(format!("In-Memory ({} nodes)", self.graph.all().len()), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                        Span::styled(format!("In-Memory ({} nodes)", self.graph.all().len()), value_style)
                     },
                 ]),
                 Line::from(vec![
                     Span::styled(" Store : ", label_style),
-                    Span::styled(if self.store.is_some() { "SQLite + FTS5" } else { "RAM Ephemeral" }, Style::default().fg(Color::LightMagenta)),
+                    Span::styled(if self.store.is_some() { "SQLite + FTS5" } else { "RAM Ephemeral" }, value_style),
                 ]),
                 Line::from(vec![Span::styled(" Cmd   : ", label_style), Span::styled("/dendrite", t.dim_text())]),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("◖ ", Style::default().fg(Color::LightCyan)),
-                    Span::styled("AGENCY & BOTS", Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(" ◗", Style::default().fg(Color::LightCyan)),
+                    Span::styled("◖ AGENCY & BOTS ◗", primary_accent),
                 ]),
                 Line::from(vec![
                     Span::styled(" Active:", label_style),
-                    Span::styled(bot_ticker, if active_bots > 0 { Style::default().fg(Color::Green).add_modifier(Modifier::BOLD) } else { value_style }),
+                    Span::styled(bot_ticker, if active_bots > 0 { secondary_accent } else { value_style }),
                 ]),
                 Line::from(vec![
                     Span::styled(" Cap   : ", label_style),
@@ -4870,15 +4877,13 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                 Line::from(vec![Span::styled(" Cmd   : ", label_style), Span::styled("@slug or /bots", t.dim_text())]),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("◖ ", Style::default().fg(Color::Rgb(100, 180, 255))),
-                    Span::styled("COMMANDS", Style::default().fg(Color::Rgb(100, 180, 255)).add_modifier(Modifier::BOLD)),
-                    Span::styled(" ◗", Style::default().fg(Color::Rgb(100, 180, 255))),
+                    Span::styled("◖ COMMANDS ◗", primary_accent),
                 ]),
-                Line::from(vec![Span::styled(" /help    ", Style::default().fg(Color::Cyan)), Span::styled("Palette", value_style)]),
-                Line::from(vec![Span::styled(" /dendrite", Style::default().fg(Color::Yellow)), Span::styled("3D Graph", value_style)]),
-                Line::from(vec![Span::styled(" /model   ", Style::default().fg(Color::Green)), Span::styled("Switch Model", value_style)]),
-                Line::from(vec![Span::styled(" /theme   ", Style::default().fg(Color::Magenta)), Span::styled("Theme Switch", value_style)]),
-                Line::from(vec![Span::styled(" /doctor  ", Style::default().fg(Color::LightBlue)), Span::styled("Diagnostics", value_style)]),
+                Line::from(vec![Span::styled(" /help    ", secondary_accent), Span::styled("Palette", value_style)]),
+                Line::from(vec![Span::styled(" /dendrite", secondary_accent), Span::styled("3D Graph", value_style)]),
+                Line::from(vec![Span::styled(" /model   ", secondary_accent), Span::styled("Switch Model", value_style)]),
+                Line::from(vec![Span::styled(" /theme   ", secondary_accent), Span::styled("Theme Switch", value_style)]),
+                Line::from(vec![Span::styled(" /doctor  ", secondary_accent), Span::styled("Diagnostics", value_style)]),
                 Line::from(vec![Span::styled(" Type '/' for all", t.dim_text())]),
             ];
 
@@ -5079,11 +5084,11 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
             (viewport_area, None)
         };
 
-        let vp_border = t.border_style().fg(crate::harness_ui::animated_border_color(
-            self.anim_tick,
-            self.is_generating,
-            t.border_style().fg.unwrap_or(Color::Cyan),
-        ));
+        let vp_border = if self.is_generating {
+            t.active_border_style()
+        } else {
+            t.border_style()
+        };
         let viewport = Paragraph::new(chat_lines)
             .wrap(Wrap { trim: false })
             .scroll((effective_scroll, 0))

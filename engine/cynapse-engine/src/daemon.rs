@@ -390,17 +390,26 @@ impl LlamaServerDaemon {
     /// Singleton daemon spawner: checks health, respects failure cooldown, and spawns if binary and model exist.
     pub fn get_or_spawn_daemon(model_path: &Path, port: u16) -> bool {
         static ACTIVE_DAEMON: std::sync::OnceLock<std::sync::Mutex<Option<LlamaServerDaemon>>> = std::sync::OnceLock::new();
+        static ACTIVE_MODEL_PATH: std::sync::OnceLock<std::sync::Mutex<Option<PathBuf>>> = std::sync::OnceLock::new();
         static SPAWN_COOLDOWN: std::sync::OnceLock<std::sync::Mutex<(usize, Option<Instant>)>> = std::sync::OnceLock::new();
 
-        if Self::is_healthy(port) {
+        let model_lock = ACTIVE_MODEL_PATH.get_or_init(|| std::sync::Mutex::new(None));
+        let same_model = model_lock
+            .lock()
+            .map(|g| g.as_deref() == Some(model_path))
+            .unwrap_or(false);
+
+        if same_model && Self::is_healthy(port) {
             return true;
         }
 
         let cd_lock = SPAWN_COOLDOWN.get_or_init(|| std::sync::Mutex::new((0, None)));
-        if let Ok(cd) = cd_lock.lock() {
-            if let Some(until) = cd.1 {
-                if Instant::now() < until {
-                    return false;
+        if same_model {
+            if let Ok(cd) = cd_lock.lock() {
+                if let Some(until) = cd.1 {
+                    if Instant::now() < until {
+                        return false;
+                    }
                 }
             }
         }
@@ -411,7 +420,18 @@ impl LlamaServerDaemon {
             Err(_) => return false,
         };
 
-        if Self::is_healthy(port) {
+        // If switching models or an orphan llama-server is holding RAM on this port, offload it first!
+        if !same_model {
+            if let Some(mut old) = guard.take() {
+                old.shutdown();
+            }
+            if Self::is_healthy(port) {
+                let _ = Command::new("pkill")
+                    .args(["-f", &format!("llama-server.*--port {}", port)])
+                    .status();
+                std::thread::sleep(Duration::from_millis(350));
+            }
+        } else if Self::is_healthy(port) {
             return true;
         }
 
@@ -419,6 +439,9 @@ impl LlamaServerDaemon {
             Ok(d) => {
                 if let Ok(mut cd) = cd_lock.lock() {
                     *cd = (0, None);
+                }
+                if let Ok(mut ml) = model_lock.lock() {
+                    *ml = Some(model_path.to_path_buf());
                 }
                 *guard = Some(d);
                 true
