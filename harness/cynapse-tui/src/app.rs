@@ -4986,7 +4986,6 @@ pub fn render_markdown_lines(text: &str, theme: AppTheme) -> Vec<Line<'static>> 
                         chat_lines.push(Line::from(""));
                     }
                     "assistant" => {
-                        chat_lines.push(Line::from(Span::styled("Cynapse:", t.assistant_header())));
                         if let Some(think) = &msg.thinking {
                             if self.show_thinking {
                                 chat_lines.push(Line::from(Span::styled("  ▼ [Thinking... (Ctrl+T to collapse)]", t.thinking_header())));

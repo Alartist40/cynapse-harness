@@ -80,3 +80,8 @@ Tested via `./bin/llama-cli --single-turn --simple-io -n 350 -t 6` (`models/Glia
 - **Adversarial Suite (`6 / 6`):** `prompt_injection` (`93.9 / 28.0 t/s`), `windows_persistence` (`86.0 / 28.3 t/s`), `reverse_shell_ioc` (`93.8 / 28.2 t/s`), `generic_tool_json` (`86.4 / 28.2 t/s`), `dns_tunneling` (`91.3 / 28.4 t/s`), `suid_audit` (`82.5 / 28.4 t/s`).
 - **Observed Limitation:** At `-n 350`, `LFM3-1.7B`'s `[Start thinking]` block consumes most of the 350-token cap on complex prompts; `-n 700+` or `--reasoning-budget 0` yields complete un-truncated final answers.
 
+### 5.3 Interactive TUI Controls & Portability (`2026-11-22`)
+- **`/effort <none|low|med|high|auto>`:** Wired `reasoning_budget_tokens` (`0 / 96 / 256 / 1024`) into `cynapse-engine` (`27.3 t/s` observed on `Glia-1.7B-v1.5-Q4_K_M.gguf` with `/effort none`), plus clean `[Start thinking]` / `[End thinking]` separation.
+- **Safety & Stability:** Offloads prior `llama-server` on model switch, enforces a RAM headroom guard, reads hardware `timings.predicted_per_second`, removes strobing borders, and ships `models/Glia-1.7B.Modelfile` + `GLIA.md` for portable Ollama/`llama.cpp` reuse.
+
+
